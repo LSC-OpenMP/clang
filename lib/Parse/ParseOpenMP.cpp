@@ -1192,6 +1192,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
 
     Clause = ParseOpenMPSimpleClause(CKind);
     break;
+  case OMPC_use:
   case OMPC_schedule:
   case OMPC_dist_schedule:
   case OMPC_defaultmap:
@@ -1208,7 +1209,16 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
   case OMPC_if:
     Clause = ParseOpenMPSingleExprWithArgClause(CKind);
     break;
+  case OMPC_module:
+    if (!FirstClause) {
+      Diag(Tok, diag::err_omp_more_one_clause)
+          << getOpenMPDirectiveName(DKind) << getOpenMPClauseName(CKind) << 0;
+      ErrorFound = true;
+    }
+    Clause = ParseOpenMPAccClause(CKind);
+    break;
   case OMPC_nowait:
+  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_read:
@@ -1496,6 +1506,53 @@ OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPClauseKind Kind) {
     if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::comma) &&
         Tok.isNot(tok::annot_pragma_openmp_end))
       ConsumeAnyToken();
+  } else if (Kind == OMPC_use) {
+    enum { UseKind, NumberOfElements };
+    Arg.resize(NumberOfElements);
+    KLoc.resize(NumberOfElements);
+    //Arg[Modifier1] = OMPC_SCHEDULE_MODIFIER_unknown;
+    //Arg[Modifier2] = OMPC_SCHEDULE_MODIFIER_unknown;
+    Arg[UseKind] = OMPC_USE_unknown;
+    auto KindModifier = getOpenMPSimpleClauseType(
+        Kind, Tok.isAnnotation() ? "" : PP.getSpelling(Tok));
+    if (KindModifier > OMPC_USE_unknown) {
+      // Parse 'modifier'
+      //Arg[Modifier1] = KindModifier;
+      //KLoc[Modifier1] = Tok.getLocation();
+      if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::comma) &&
+          Tok.isNot(tok::annot_pragma_openmp_end))
+        ConsumeAnyToken();
+      if (Tok.is(tok::comma)) {
+        // Parse ',' 'modifier'
+        ConsumeAnyToken();
+        //KindModifier = getOpenMPSimpleClauseType(
+        //    Kind, Tok.isAnnotation() ? "" : PP.getSpelling(Tok));
+        //Arg[Modifier2] = KindModifier > OMPC_SCHEDULE_unknown
+        //                     ? KindModifier
+        //                     : (unsigned)OMPC_SCHEDULE_unknown;
+        //KLoc[Modifier2] = Tok.getLocation();
+        if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::comma) &&
+            Tok.isNot(tok::annot_pragma_openmp_end))
+          ConsumeAnyToken();
+      }
+      // Parse ':'
+      if (Tok.is(tok::colon))
+        ConsumeAnyToken();
+      else
+        Diag(Tok, diag::warn_pragma_expected_colon) << "use modifier";
+     // KindModifier = getOpenMPSimpleClauseType(
+      //    Kind, Tok.isAnnotation() ? "" : PP.getSpelling(Tok));
+    }
+    Arg[UseKind] = KindModifier;
+    KLoc[UseKind] = Tok.getLocation();
+    if (Tok.isNot(tok::r_paren) && Tok.isNot(tok::comma) &&
+        Tok.isNot(tok::annot_pragma_openmp_end))
+      ConsumeAnyToken();
+    if ((Arg[UseKind] == OMPC_USE_dswp ||
+         Arg[UseKind] == OMPC_USE_bdx ||
+         Arg[UseKind] == OMPC_USE_psbdx || Arg[UseKind] == OMPC_USE_tls) &&
+        Tok.is(tok::comma))
+      DelimLoc = ConsumeAnyToken();
   } else {
     assert(Kind == OMPC_if);
     KLoc.push_back(Tok.getLocation());
@@ -1515,6 +1572,7 @@ OMPClause *Parser::ParseOpenMPSingleExprWithArgClause(OpenMPClauseKind Kind) {
   }
 
   bool NeedAnExpression = (Kind == OMPC_schedule && DelimLoc.isValid()) ||
+                          (Kind == OMPC_use && DelimLoc.isValid()) ||
                           (Kind == OMPC_dist_schedule && DelimLoc.isValid()) ||
                           Kind == OMPC_if;
   if (NeedAnExpression) {
@@ -1839,5 +1897,39 @@ OMPClause *Parser::ParseOpenMPVarListClause(OpenMPDirectiveKind DKind,
       Data.ReductionIdScopeSpec, Data.ReductionId, Data.DepKind, Data.LinKind,
       Data.MapTypeModifier, Data.MapType, Data.IsMapTypeImplicit,
       Data.DepLinMapLoc);
+}
+
+/// \brief Parsing of OpenMP clauses with accelerator.
+///
+///    module-clause:
+///      'module' '(' filename ')'
+///
+OMPClause *Parser::ParseOpenMPAccClause(OpenMPClauseKind Kind) {
+  SourceLocation Loc = ConsumeToken();
+
+  // Parse '('.
+  BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_openmp_end);
+  if (T.expectAndConsume(diag::err_expected_lparen_after,
+                         getOpenMPClauseName(Kind)))
+    return nullptr;
+
+  std::string filename;
+
+  // Filename
+  do {
+    filename += PP.getSpelling(Tok);
+    ConsumeAnyToken();
+  } while ( Tok.isNot(tok::r_paren) &&
+            Tok.isNot(tok::comma) &&
+            Tok.isNot(tok::annot_pragma_openmp_end) );
+
+  // Parse ')'.
+  T.consumeClose();
+
+  return Actions.ActOnOpenMPAccClause(Kind,
+                                      StringRef(filename),
+                                      Loc,
+                                      T.getOpenLocation(),
+                                      T.getCloseLocation());
 }
 

@@ -1482,6 +1482,17 @@ public:
                                               StartLoc, LParenLoc, EndLoc);
   }
 
+  /// By default, performs semantic analysis to build the new OpenMP clause.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPUseClause(OpenMPUseClauseKind Kind,
+                                     SourceLocation KindKwLoc,
+                                     SourceLocation StartLoc,
+                                     SourceLocation LParenLoc,
+                                     SourceLocation EndLoc, Expr *ChunkSize) {
+    return getSema().ActOnOpenMPUseClause(Kind, KindKwLoc,
+                                          StartLoc, LParenLoc, EndLoc, ChunkSize);
+  }
+
   /// \brief Build a new OpenMP 'proc_bind' clause.
   ///
   /// By default, performs semantic analysis to build the new OpenMP clause.
@@ -1695,7 +1706,7 @@ public:
   OMPClause *RebuildOMPNumTeamsClause(Expr *NumTeams, SourceLocation StartLoc,
                                       SourceLocation LParenLoc,
                                       SourceLocation EndLoc) {
-    return getSema().ActOnOpenMPNumTeamsClause(NumTeams, StartLoc, LParenLoc, 
+    return getSema().ActOnOpenMPNumTeamsClause(NumTeams, StartLoc, LParenLoc,
                                                EndLoc);
   }
 
@@ -2922,7 +2933,7 @@ public:
                                           Sel, Method, LBracLoc, SelectorLocs,
                                           RBracLoc, Args);
 
-      
+
   }
 
   /// \brief Build a new Objective-C ivar reference expression.
@@ -6040,7 +6051,7 @@ TreeTransform<Derived>::TransformObjCObjectType(TypeLocBuilder &TLB,
 
         TypeLocBuilder TypeArgBuilder;
         TypeArgBuilder.reserve(PatternLoc.getFullDataSize());
-        QualType NewPatternType = getDerived().TransformType(TypeArgBuilder, 
+        QualType NewPatternType = getDerived().TransformType(TypeArgBuilder,
                                                              PatternLoc);
         if (NewPatternType.isNull())
           return QualType();
@@ -7863,6 +7874,14 @@ TreeTransform<Derived>::TransformOMPDefaultClause(OMPDefaultClause *C) {
 
 template <typename Derived>
 OMPClause *
+TreeTransform<Derived>::TransformOMPUseClause(OMPUseClause *C) {
+  return getDerived().RebuildOMPUseClause(
+      C->getUseKind(), C->getUseKindKwLoc(), C->getLocStart(),
+      C->getLParenLoc(), C->getLocEnd(), C->getChunkSize());
+}
+
+template <typename Derived>
+OMPClause *
 TreeTransform<Derived>::TransformOMPProcBindClause(OMPProcBindClause *C) {
   return getDerived().RebuildOMPProcBindClause(
       C->getProcBindKind(), C->getProcBindKindKwLoc(), C->getLocStart(),
@@ -7898,6 +7917,13 @@ TreeTransform<Derived>::TransformOMPOrderedClause(OMPOrderedClause *C) {
 template <typename Derived>
 OMPClause *
 TreeTransform<Derived>::TransformOMPNowaitClause(OMPNowaitClause *C) {
+  // No need to rebuild this clause, no template-dependent parameters.
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPCheckClause(OMPCheckClause *C) {
   // No need to rebuild this clause, no template-dependent parameters.
   return C;
 }
@@ -8273,6 +8299,12 @@ OMPClause *TreeTransform<Derived>::TransformOMPDistScheduleClause(
 template <typename Derived>
 OMPClause *
 TreeTransform<Derived>::TransformOMPDefaultmapClause(OMPDefaultmapClause *C) {
+  return C;
+}
+
+template <typename Derived>
+OMPClause *
+TreeTransform<Derived>::TransformOMPModuleClause(OMPModuleClause *C) {
   return C;
 }
 
@@ -10408,7 +10440,7 @@ TreeTransform<Derived>::TransformLambdaExpr(LambdaExpr *E) {
   TypeSourceInfo *NewCallOpTSI = nullptr;
   {
     TypeSourceInfo *OldCallOpTSI = E->getCallOperator()->getTypeSourceInfo();
-    FunctionProtoTypeLoc OldCallOpFPTL = 
+    FunctionProtoTypeLoc OldCallOpFPTL =
         OldCallOpTSI->getTypeLoc().getAs<FunctionProtoTypeLoc>();
 
     TypeLocBuilder NewCallOpTLBuilder;
@@ -10503,7 +10535,7 @@ TreeTransform<Derived>::TransformLambdaExpr(LambdaExpr *E) {
 
     // Rebuild init-captures, including the implied field declaration.
     if (E->isInitCapture(C)) {
-      InitCaptureInfoTy InitExprTypePair = 
+      InitCaptureInfoTy InitExprTypePair =
           InitCaptureExprsAndTypes[C - E->capture_begin()];
       ExprResult Init = InitExprTypePair.first;
       QualType InitQualType = InitExprTypePair.second;

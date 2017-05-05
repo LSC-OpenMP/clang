@@ -168,6 +168,9 @@
 #ifndef OPENMP_TARGET_TEAMS_DISTRIBUTE_SIMD_CLAUSE
 #define OPENMP_TARGET_TEAMS_DISTRIBUTE_SIMD_CLAUSE(Name)
 #endif
+#ifndef OPENMP_USE_KIND
+#define OPENMP_USE_KIND(Name)
+#endif
 
 // OpenMP directives.
 OPENMP_DIRECTIVE(threadprivate)
@@ -236,6 +239,8 @@ OPENMP_CLAUSE(firstprivate, OMPFirstprivateClause)
 OPENMP_CLAUSE(lastprivate, OMPLastprivateClause)
 OPENMP_CLAUSE(shared,  OMPSharedClause)
 OPENMP_CLAUSE(reduction,  OMPReductionClause)
+OPENMP_CLAUSE(module,  OMPModuleClause)
+OPENMP_CLAUSE(check,  OMPCheckClause)
 OPENMP_CLAUSE(linear,  OMPLinearClause)
 OPENMP_CLAUSE(aligned, OMPAlignedClause)
 OPENMP_CLAUSE(copyin,  OMPCopyinClause)
@@ -270,6 +275,7 @@ OPENMP_CLAUSE(to, OMPToClause)
 OPENMP_CLAUSE(from, OMPFromClause)
 OPENMP_CLAUSE(use_device_ptr, OMPUseDevicePtrClause)
 OPENMP_CLAUSE(is_device_ptr, OMPIsDevicePtrClause)
+OPENMP_CLAUSE(use, OMPUseClause)
 
 // Clauses allowed for OpenMP directive 'parallel'.
 OPENMP_PARALLEL_CLAUSE(if)
@@ -337,6 +343,16 @@ OPENMP_CANCEL_CLAUSE(if)
 OPENMP_DEFAULT_KIND(none)
 OPENMP_DEFAULT_KIND(shared)
 
+// Static attributes for 'use' clause
+OPENMP_USE_KIND(dswp)
+OPENMP_USE_KIND(psdswp)
+OPENMP_USE_KIND(bdx)
+OPENMP_USE_KIND(psbdx)
+OPENMP_USE_KIND(psbdx2)
+OPENMP_USE_KIND(doacross)
+OPENMP_USE_KIND(hrw)
+OPENMP_USE_KIND(tls)
+
 // Static attributes for 'proc_bind' clause.
 OPENMP_PROC_BIND_KIND(master)
 OPENMP_PROC_BIND_KIND(close)
@@ -366,6 +382,7 @@ OPENMP_DEPEND_KIND(out)
 OPENMP_DEPEND_KIND(inout)
 OPENMP_DEPEND_KIND(source)
 OPENMP_DEPEND_KIND(sink)
+OPENMP_DEPEND_KIND(var)
 
 // Modifiers for 'linear' clause.
 OPENMP_LINEAR_KIND(val)
@@ -381,12 +398,15 @@ OPENMP_PARALLEL_FOR_CLAUSE(private)
 OPENMP_PARALLEL_FOR_CLAUSE(firstprivate)
 OPENMP_PARALLEL_FOR_CLAUSE(shared)
 OPENMP_PARALLEL_FOR_CLAUSE(reduction)
+OPENMP_PARALLEL_FOR_CLAUSE(module)
+OPENMP_PARALLEL_FOR_CLAUSE(check)
 OPENMP_PARALLEL_FOR_CLAUSE(copyin)
 OPENMP_PARALLEL_FOR_CLAUSE(lastprivate)
 OPENMP_PARALLEL_FOR_CLAUSE(collapse)
 OPENMP_PARALLEL_FOR_CLAUSE(schedule)
 OPENMP_PARALLEL_FOR_CLAUSE(ordered)
 OPENMP_PARALLEL_FOR_CLAUSE(linear)
+OPENMP_PARALLEL_FOR_CLAUSE(use)
 
 // Clauses allowed for OpenMP directive 'parallel for simd'.
 OPENMP_PARALLEL_FOR_SIMD_CLAUSE(if)
@@ -903,3 +923,4 @@ OPENMP_TARGET_TEAMS_DISTRIBUTE_SIMD_CLAUSE(simdlen)
 #undef OPENMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_FOR_CLAUSE
 #undef OPENMP_TARGET_TEAMS_DISTRIBUTE_PARALLEL_FOR_SIMD_CLAUSE
 #undef OPENMP_TARGET_TEAMS_DISTRIBUTE_SIMD_CLAUSE
+#undef OPENMP_USE_KIND

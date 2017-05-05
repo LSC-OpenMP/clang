@@ -93,6 +93,7 @@ const OMPClauseWithPreInit *OMPClauseWithPreInit::get(const OMPClause *C) {
   case OMPC_uniform:
   case OMPC_to:
   case OMPC_from:
+  case OMPC_module:
   case OMPC_use_device_ptr:
   case OMPC_is_device_ptr:
     break;
@@ -158,6 +159,7 @@ const OMPClauseWithPostUpdate *OMPClauseWithPostUpdate::get(const OMPClause *C) 
   case OMPC_uniform:
   case OMPC_to:
   case OMPC_from:
+  case OMPC_module:
   case OMPC_use_device_ptr:
   case OMPC_is_device_ptr:
     break;
