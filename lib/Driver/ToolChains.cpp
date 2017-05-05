@@ -1813,6 +1813,8 @@ CudaInstallationDetector::CudaInstallationDetector(
   if (Args.hasArg(options::OPT_cuda_path_EQ))
     CudaPathCandidates.push_back(
         Args.getLastArgValue(options::OPT_cuda_path_EQ));
+  else if (char *env = ::getenv("CUDAPATH"))
+    CudaPathCandidates.push_back(D.SysRoot + env);
   else {
     CudaPathCandidates.push_back(D.SysRoot + "/usr/local/cuda-8.0");
     CudaPathCandidates.push_back(D.SysRoot + "/usr/local/cuda");
@@ -4957,15 +4959,19 @@ void CudaToolChain::addClangTargetOptions(
     }
 
     std::string LibOmpTargetName = "libomptarget-nvptx.bc";
+    bool FoundBCLibrary = false;
     for (std::string LibraryPath : LibraryPaths) {
       SmallString<128> LibOmpTargetFile(LibraryPath);
       llvm::sys::path::append(LibOmpTargetFile, LibOmpTargetName);
       if (llvm::sys::fs::exists(LibOmpTargetFile)) {
         CC1Args.push_back("-mlink-cuda-bitcode");
         CC1Args.push_back(DriverArgs.MakeArgString(LibOmpTargetFile));
+        FoundBCLibrary = true;
         break;
       }
     }
+    if (!FoundBCLibrary)
+      getDriver().Diag(diag::remark_drv_omp_offload_target_missingbcruntime);
   }
 }
 
