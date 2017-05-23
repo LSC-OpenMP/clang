@@ -1,0 +1,16 @@
+# circle.yml
+machine:
+  environment:
+    LLVM_SRC: "$HOME/llvm"
+    CLANG_SRC: "$HOME/clang"
+
+dependencies:
+  pre:
+    - git clone --depth 1 git://github.com/lsc-openmp/llvm.git $LLVM_SRC
+
+test:
+  pre:
+    - cp -R $CLANG_SRC $LLVM_SRC/tools/
+  override:
+    - cmake $LLVM_SRC
+    - make
