@@ -3205,6 +3205,40 @@ CGOpenMPRuntime::createOffloadingBinaryDescriptorRegistration() {
   return RegFn;
 }
 
+void CGOpenMPRuntime::createOffloadConfiguration() {
+  uint32_t env_id;
+
+  // If we do not have entries, we dont need to do anything.
+  if (OffloadEntriesInfoManager.empty())
+    return;
+
+  if (!CGM.getLangOpts().OpenMPIsDevice &&
+      CGM.getLangOpts().OMPTargetTriples.empty())
+    return;
+
+  env_id = 11;
+
+  auto *TgtConfigurationType = cast<llvm::StructType>(
+      CGM.getTypes().ConvertTypeForMem(getTgtConfigurationyQTy()));
+
+  // Decide linkage type of the entry struct by looking at the linkage type of
+  // the variable. By default the linkage is Link-Once.
+  auto EntryLinkage = llvm::GlobalValue::WeakAnyLinkage;
+
+  // We can't have any padding between symbols, so we need to have 1-byte
+  // alignment.
+  auto Align = CharUnits::fromQuantity(1);
+
+  ConstantInitBuilder EntryBuilder(CGM);
+  auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
+  EntryInit.addInt(CGM.Int32Ty, env_id);
+  SmallString<128> EntryGblName(".omp_offloading.configuration.var");
+  llvm::GlobalVariable *Entry =
+      EntryInit.finishAndCreateGlobal(EntryGblName, Align,
+                                      /*constant*/ true, EntryLinkage);
+  Entry->setSection(".omp_offloading.configuration");
+}
+
 void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
                                          llvm::Constant *Addr, uint64_t Size,
                                          uint64_t Flags) {
@@ -3471,6 +3505,25 @@ static FieldDecl *addFieldToRecordDecl(ASTContext &C, DeclContext *DC,
   Field->setAccess(AS_public);
   DC->addDecl(Field);
   return Field;
+}
+
+QualType CGOpenMPRuntime::getTgtConfigurationyQTy() {
+
+  // Make sure the type of the entry is already created. This is the type we
+  // have to create:
+  // struct __tgt_configuration{
+  //   int32_t  env_id;       // Environment id.
+  // };
+  if (TgtConfigurationQTy.isNull()) {
+    ASTContext &C = CGM.getContext();
+    auto *RD = C.buildImplicitRecord("__tgt_configuration");
+    RD->startDefinition();
+    addFieldToRecordDecl(
+        C, RD, C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/true));
+    RD->completeDefinition();
+    TgtConfigurationQTy = C.getRecordType(RD);
+  }
+  return TgtConfigurationQTy;
 }
 
 QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
@@ -7244,6 +7297,8 @@ llvm::Function *CGOpenMPRuntime::emitRegistrationFunction() {
 
     OffloadEntriesInfoManager.registerDeviceFunctionEntryInfo(II->first());
   }
+
+  createOffloadConfiguration();
 
   // If we have offloading in the current module, we need to emit the entries
   // now and register the offloading descriptor.

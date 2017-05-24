@@ -278,6 +278,10 @@ private:
   ///  kmp_int64 st; // stride
   /// };
   QualType KmpDimTy;
+  /// \brief Type struct __tgt_configuration{
+  ///   char      *name;       // Name of the function or global.
+  /// };
+  QualType TgtConfigurationQTy;
   /// \brief Type struct __tgt_offload_entry{
   ///   void      *addr;       // Pointer to the offload entry info.
   ///                          // (function or global)
@@ -546,6 +550,8 @@ private:
   /// compilation unit. The function that does the registration is returned.
   llvm::Function *createOffloadingBinaryDescriptorRegistration();
 
+  void createOffloadConfiguration();
+
   /// \brief Creates all the offload entries in the current compilation unit
   /// along with the associated metadata.
   void createOffloadEntriesAndInfoMetadata();
@@ -553,6 +559,9 @@ private:
   /// \brief Loads all the offload entries information from the host IR
   /// metadata.
   void loadOffloadInfoMetadata();
+
+  /// \brief Returns __tgt_configuration type.
+  QualType getTgtConfigurationyQTy();
 
   /// \brief Returns __tgt_offload_entry type.
   QualType getTgtOffloadEntryQTy();
