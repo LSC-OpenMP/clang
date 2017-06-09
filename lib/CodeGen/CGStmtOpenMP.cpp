@@ -2909,28 +2909,7 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     CGF.EmitOMPWorksharingLoop(S);
   };
 
-  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
-
-  if (C) {
-    if (C->getUseKind() == OMPC_USE_hrw) {
-      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
-      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
-
-      // EmitRuntimeCall(CGM.getMPtoFPGARuntime().fpga_init());
-
-      llvm::errs() << "hrw!\n";
-
-      if (c_module) {
-        llvm::errs() << "module: " << c_module->getModuleNameInfo() << "\n";
-      } else {
-        llvm::errs() << "module clause not specified" << "\n";
-      }
-
-      if (c_check) {
-        llvm::errs() << "check!\n";
-      }
-    }
-  }
+  CGM.getOpenMPRuntime().createFPGAInfo(S);
 
   emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen);
 }
