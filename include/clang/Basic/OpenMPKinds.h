@@ -47,14 +47,6 @@ enum OpenMPDefaultClauseKind {
   OMPC_DEFAULT_unknown
 };
 
-/// \brief OpenMP attributes for 'use' clause.
-enum OpenMPUseClauseKind {
-#define OPENMP_USE_KIND(Name) \
-  OMPC_USE_##Name,
-#include "clang/Basic/OpenMPKinds.def"
-  OMPC_USE_unknown
-};
-
 /// \brief OpenMP attributes for 'proc_bind' clause.
 enum OpenMPProcBindClauseKind {
 #define OPENMP_PROC_BIND_KIND(Name) \

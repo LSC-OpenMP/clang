@@ -2914,30 +2914,6 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     OMPCancelStackRAII CancelRegion(CGF, OMPD_parallel_for, S.hasCancel());
     CGF.EmitOMPWorksharingLoop(S);
   };
-
-  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
-
-  if (C) {
-    if (C->getUseKind() == OMPC_USE_hrw) {
-      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
-      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
-
-      // EmitRuntimeCall(CGM.getMPtoFPGARuntime().fpga_init());
-
-      llvm::errs() << "hrw!\n";
-
-      if (c_module) {
-        llvm::errs() << "module: " << c_module->getModuleNameInfo() << "\n";
-      } else {
-        llvm::errs() << "module clause not specified" << "\n";
-      }
-
-      if (c_check) {
-        llvm::errs() << "check!\n";
-      }
-    }
-  }
-
   emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen);
 }
 
@@ -3898,12 +3874,10 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_firstprivate:
   case OMPC_lastprivate:
   case OMPC_reduction:
-  case OMPC_module:
   case OMPC_safelen:
   case OMPC_simdlen:
   case OMPC_collapse:
   case OMPC_default:
-  case OMPC_use:
   case OMPC_seq_cst:
   case OMPC_shared:
   case OMPC_linear:
@@ -3915,7 +3889,6 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_schedule:
   case OMPC_ordered:
   case OMPC_nowait:
-  case OMPC_check:
   case OMPC_untied:
   case OMPC_threadprivate:
   case OMPC_depend:
@@ -3938,6 +3911,8 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_from:
   case OMPC_use_device_ptr:
   case OMPC_is_device_ptr:
+  case OMPC_task_reduction:
+  case OMPC_in_reduction:
     llvm_unreachable("Clause is not allowed in 'omp atomic'.");
   }
 }
@@ -3985,6 +3960,16 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
   assert(isOpenMPTargetExecutionDirective(S.getDirectiveKind()));
   CodeGenModule &CGM = CGF.CGM;
   const CapturedStmt &CS = *cast<CapturedStmt>(S.getAssociatedStmt());
+
+  // On device emit this construct as inlined code.
+  if (CGM.getLangOpts().OpenMPIsDevice) {
+    OMPLexicalScope Scope(CGF, S);
+    CGM.getOpenMPRuntime().emitInlinedDirective(
+        CGF, OMPD_target, [&CS](CodeGenFunction &CGF, PrePostActionTy &) {
+          CGF.EmitStmt(CS.getCapturedStmt());
+        });
+    return;
+  }
 
   llvm::Function *Fn = nullptr;
   llvm::Constant *FnID = nullptr;
