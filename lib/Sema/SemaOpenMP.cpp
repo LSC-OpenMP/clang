@@ -7792,9 +7792,9 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
     SourceLocation StartLoc, SourceLocation LParenLoc, SourceLocation ColonLoc,
     SourceLocation EndLoc, CXXScopeSpec &ReductionIdScopeSpec,
     const DeclarationNameInfo &ReductionId, OpenMPDependClauseKind DepKind,
-    OpenMPLinearClauseKind LinKind, OpenMPMapClauseKind MapTypeModifier,
-    OpenMPMapClauseKind MapType, bool IsMapTypeImplicit,
-    SourceLocation DepLinMapLoc) {
+    OpenMPLinearClauseKind LinKind, OpenMPLastprivateClauseKind LpKind,
+    OpenMPMapClauseKind MapTypeModifier, OpenMPMapClauseKind MapType,
+    bool IsMapTypeImplicit, SourceLocation DepLinMapLoc) {
   OMPClause *Res = nullptr;
   switch (Kind) {
   case OMPC_private:
@@ -7804,7 +7804,8 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
     Res = ActOnOpenMPFirstprivateClause(VarList, StartLoc, LParenLoc, EndLoc);
     break;
   case OMPC_lastprivate:
-    Res = ActOnOpenMPLastprivateClause(VarList, StartLoc, LParenLoc, EndLoc);
+    Res = ActOnOpenMPLastprivateClause(VarList, StartLoc, LParenLoc,
+                                       LpKind, DepLinMapLoc, ColonLoc, EndLoc);
     break;
   case OMPC_shared:
     Res = ActOnOpenMPSharedClause(VarList, StartLoc, LParenLoc, EndLoc);
@@ -8413,6 +8414,9 @@ OMPClause *Sema::ActOnOpenMPFirstprivateClause(ArrayRef<Expr *> VarList,
 OMPClause *Sema::ActOnOpenMPLastprivateClause(ArrayRef<Expr *> VarList,
                                               SourceLocation StartLoc,
                                               SourceLocation LParenLoc,
+                                              OpenMPLastprivateClauseKind LpKind,
+                                              SourceLocation LpKindLoc,
+                                              SourceLocation ColonLoc,
                                               SourceLocation EndLoc) {
   SmallVector<Expr *, 8> Vars;
   SmallVector<Expr *, 8> SrcExprs;
@@ -8439,6 +8443,13 @@ OMPClause *Sema::ActOnOpenMPLastprivateClause(ArrayRef<Expr *> VarList,
 
     QualType Type = D->getType();
     auto *VD = dyn_cast<VarDecl>(D);
+
+    // OpenMP [2.15.3.5, Restrictions, p.3]
+    //  A list item that appears in a lastprivate clause with the
+    //  conditional modifier must be a scalar variable.
+    if (LpKind == OMPC_LASTPRIVATE_conditional &&
+        !Type->isScalarType())
+      Diag(ELoc, diag::err_omp_lastprivate_cond_wrong_type) << Type;
 
     // OpenMP [2.14.3.5, Restrictions, C/C++, p.2]
     //  A variable that appears in a lastprivate clause must not have an
@@ -8562,7 +8573,8 @@ OMPClause *Sema::ActOnOpenMPLastprivateClause(ArrayRef<Expr *> VarList,
   if (Vars.empty())
     return nullptr;
 
-  return OMPLastprivateClause::Create(Context, StartLoc, LParenLoc, EndLoc,
+  return OMPLastprivateClause::Create(Context, StartLoc, LParenLoc, LpKind,
+                                      LpKindLoc, ColonLoc, EndLoc,
                                       Vars, SrcExprs, DstExprs, AssignmentOps,
                                       buildPreInits(Context, ExprCaptures),
                                       buildPostUpdate(*this, ExprPostUpdates));
