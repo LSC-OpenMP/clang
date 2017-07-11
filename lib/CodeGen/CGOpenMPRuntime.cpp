@@ -3225,10 +3225,12 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   for (unsigned i = 0; i < Devices.size(); i++) {
     if (Devices[i].isSmartNIC()) {
       llvm::errs() << "here smartnic\n";
+      sub_target_id = 11;
+    } else if (Devices[i].isHarp()) {
+      llvm::errs() << "here harp\n";
+      sub_target_id = 12;
     }
   }
-
-  sub_target_id = 11;
 
   // Create constant string with the name.
   llvm::Constant *StrPtrInit =
