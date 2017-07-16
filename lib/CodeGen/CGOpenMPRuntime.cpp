@@ -3206,7 +3206,7 @@ CGOpenMPRuntime::createOffloadingBinaryDescriptorRegistration() {
 }
 
 void CGOpenMPRuntime::createOffloadConfiguration() {
-  uint32_t sub_target_id;
+  int32_t sub_target_id;
   auto *TgtConfigurationType = cast<llvm::StructType>(
       CGM.getTypes().ConvertTypeForMem(getTgtConfigurationyQTy()));
   llvm::LLVMContext &C = CGM.getModule().getContext();
@@ -3219,18 +3219,6 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   if (!CGM.getLangOpts().OpenMPIsDevice &&
       CGM.getLangOpts().OMPTargetTriples.empty())
     return;
-
-  auto &Devices = CGM.getLangOpts().OMPTargetTriples;
-
-  for (unsigned i = 0; i < Devices.size(); i++) {
-    if (Devices[i].isSmartNIC()) {
-      llvm::errs() << "here smartnic\n";
-      sub_target_id = 11;
-    } else if (Devices[i].isHarp()) {
-      llvm::errs() << "here harp\n";
-      sub_target_id = 12;
-    }
-  }
 
   // Create constant string with the name.
   llvm::Constant *StrPtrInit =
@@ -3250,6 +3238,19 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   // We can't have any padding between symbols, so we need to have 1-byte
   // alignment.
   auto Align = CharUnits::fromQuantity(1);
+
+  auto &Triple = CGM.getTarget().getTargetOpts().Triple;
+
+  if (Triple == "smartnic") {
+    sub_target_id = 9001;
+  } else if (Triple == "harp") {
+    sub_target_id = 9002;
+  } else {
+    sub_target_id = 0;
+  }
+
+  llvm::errs() << "sub_target_id: " << sub_target_id << "\n";
+  llvm::errs() << "triple       : " << Triple << "\n";
 
   ConstantInitBuilder EntryBuilder(CGM);
   auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
@@ -7945,11 +7946,8 @@ void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
       const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
       const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
 
-      // llvm::errs() << "hrw!\n";
-
       if (c_module) {
         this->TgtFPGAModule = c_module->getModuleNameInfo();
-        // llvm::errs() << "module: " << c_module->getModuleNameInfo() << "\n";
       } else {
         llvm::errs() << "module clause not specified" << "\n";
       }
