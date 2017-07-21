@@ -7041,6 +7041,22 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   return Res;
 }
 
+OMPClause *Sema::ActOnOpenMPAccClause(OpenMPClauseKind Kind,
+                                      llvm::StringRef Info,
+                                      SourceLocation StartLoc,
+                                      SourceLocation LParenLoc,
+                                      SourceLocation EndLoc) {
+  OMPClause *Res = nullptr;
+  switch (Kind) {
+  case OMPC_module:
+    Res = ActOnOpenMPModuleClause(Info, StartLoc, LParenLoc, EndLoc);
+    break;
+  default:
+    llvm_unreachable("Clause is not allowed.");
+  }
+  return Res;
+}
+
 static unsigned getOpenMPCaptureLevel(OpenMPDirectiveKind DKind,
                                       OpenMPClauseKind CKind) {
   switch (CKind) {
