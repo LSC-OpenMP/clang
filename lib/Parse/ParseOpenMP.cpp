@@ -1193,6 +1193,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
 
     Clause = ParseOpenMPSimpleClause(CKind);
     break;
+  case OMPC_use:
   case OMPC_schedule:
   case OMPC_dist_schedule:
   case OMPC_defaultmap:
