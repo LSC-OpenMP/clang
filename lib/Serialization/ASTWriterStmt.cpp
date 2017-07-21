@@ -1811,6 +1811,11 @@ void OMPClauseWriter::VisitOMPIfClause(OMPIfClause *C) {
   Record.AddSourceLocation(C->getLParenLoc());
 }
 
+void OMPClauseWriter::VisitOMPModuleClause(OMPModuleClause *C) {
+  Record.AddString(C->getModuleNameInfo());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
 void OMPClauseWriter::VisitOMPFinalClause(OMPFinalClause *C) {
   Record.AddStmt(C->getCondition());
   Record.AddSourceLocation(C->getLParenLoc());
@@ -1843,6 +1848,12 @@ void OMPClauseWriter::VisitOMPDefaultClause(OMPDefaultClause *C) {
   Record.AddSourceLocation(C->getDefaultKindKwLoc());
 }
 
+void OMPClauseWriter::VisitOMPUseClause(OMPUseClause *C) {
+  Record.push_back(C->getUseKind());
+  Record.AddSourceLocation(C->getLParenLoc());
+  Record.AddSourceLocation(C->getUseKindKwLoc());
+}
+
 void OMPClauseWriter::VisitOMPProcBindClause(OMPProcBindClause *C) {
   Record.push_back(C->getProcBindKind());
   Record.AddSourceLocation(C->getLParenLoc());
@@ -1868,6 +1879,8 @@ void OMPClauseWriter::VisitOMPOrderedClause(OMPOrderedClause *C) {
 }
 
 void OMPClauseWriter::VisitOMPNowaitClause(OMPNowaitClause *) {}
+
+void OMPClauseWriter::VisitOMPCheckClause(OMPCheckClause *) {}
 
 void OMPClauseWriter::VisitOMPUntiedClause(OMPUntiedClause *) {}
 

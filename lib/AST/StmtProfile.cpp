@@ -316,6 +316,10 @@ void OMPClauseProfiler::VisitOMPCollapseClause(const OMPCollapseClause *C) {
 
 void OMPClauseProfiler::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 
+void OMPClauseProfiler::VisitOMPUseClause(const OMPUseClause *C) { }
+
+void OMPClauseProfiler::VisitOMPModuleClause(const OMPModuleClause *C) {}
+
 void OMPClauseProfiler::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
 void OMPClauseProfiler::VisitOMPScheduleClause(const OMPScheduleClause *C) {
@@ -330,6 +334,8 @@ void OMPClauseProfiler::VisitOMPOrderedClause(const OMPOrderedClause *C) {
 }
 
 void OMPClauseProfiler::VisitOMPNowaitClause(const OMPNowaitClause *) {}
+
+void OMPClauseProfiler::VisitOMPCheckClause(const OMPCheckClause *) {}
 
 void OMPClauseProfiler::VisitOMPUntiedClause(const OMPUntiedClause *) {}
 

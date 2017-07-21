@@ -278,6 +278,11 @@ private:
   ///  kmp_int64 st; // stride
   /// };
   QualType KmpDimTy;
+  /// \brief Type struct __tgt_configuration{
+  ///   int32_t  sub_target_id;  // sub_target id.
+  ///   char    *module;         // FPGA module name.
+  /// };
+  QualType TgtConfigurationQTy;
   /// \brief Type struct __tgt_offload_entry{
   ///   void      *addr;       // Pointer to the offload entry info.
   ///                          // (function or global)
@@ -306,6 +311,8 @@ private:
   ///                                         // entries (non inclusive).
   /// };
   QualType TgtBinaryDescriptorQTy;
+  /// \brief Target FPGA Module name
+  std::string TgtFPGAModule;
   /// \brief Entity that registers the offloading constants that were emitted so
   /// far.
   class OffloadEntriesInfoManagerTy {
@@ -546,6 +553,8 @@ private:
   /// compilation unit. The function that does the registration is returned.
   llvm::Function *createOffloadingBinaryDescriptorRegistration();
 
+  void createOffloadConfiguration();
+
   /// \brief Creates all the offload entries in the current compilation unit
   /// along with the associated metadata.
   void createOffloadEntriesAndInfoMetadata();
@@ -553,6 +562,9 @@ private:
   /// \brief Loads all the offload entries information from the host IR
   /// metadata.
   void loadOffloadInfoMetadata();
+
+  /// \brief Returns __tgt_configuration type.
+  QualType getTgtConfigurationyQTy();
 
   /// \brief Returns __tgt_offload_entry type.
   QualType getTgtOffloadEntryQTy();
@@ -695,6 +707,9 @@ public:
 
   /// The function is added tracked functions list.
   virtual void addTrackedFunction(StringRef MangledName, GlobalDecl GD);
+
+  /// \brief Create the FPGA offloading info for the current context.
+  virtual void createFPGAInfo(const OMPExecutableDirective &S);
 
   /// The function register all tracked functions if they have
   /// OMPDeclareTargetDeclAttr

@@ -8462,6 +8462,8 @@ public:
 static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
                                   const TargetOptions &Opts) {
   llvm::Triple::OSType os = Triple.getOS();
+  llvm::Triple TripleSmartnic("x86_64");
+  llvm::Triple TripleHarp("x86_64");
 
   switch (Triple.getArch()) {
   default:
@@ -8825,6 +8827,12 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
     default:
       return new X86_32TargetInfo(Triple, Opts);
     }
+
+  case llvm::Triple::smartnic:
+    return new X86_64TargetInfo(TripleSmartnic, Opts);
+
+  case llvm::Triple::harp:
+    return new X86_64TargetInfo(TripleHarp, Opts);
 
   case llvm::Triple::x86_64:
     if (Triple.isOSDarwin() || Triple.isOSBinFormatMachO())

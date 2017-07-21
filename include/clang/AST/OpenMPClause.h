@@ -624,6 +624,92 @@ public:
   }
 };
 
+/// \brief This represents 'use' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp parallel for ordered(1) use(bdx)
+/// \endcode
+/// In this example directive '#pragma omp parallel for' has simple 'use'
+/// clause with kind 'bdx'.
+///
+class OMPUseClause : public OMPClause {
+  friend class OMPClauseReader;
+  /// \brief Location of '('.
+  SourceLocation LParenLoc;
+  /// \brief A kind of the 'default' clause.
+  OpenMPUseClauseKind Kind;
+  /// \brief Start location of the kind in source code.
+  SourceLocation KindKwLoc;
+  /// \brief Chunk size.
+  Expr *ChunkSize;
+
+  /// \brief Set kind of the clauses.
+  ///
+  /// \param K Argument of clause.
+  ///
+  void setUseKind(OpenMPUseClauseKind K) { Kind = K; }
+
+  /// \brief Set argument location.
+  ///
+  /// \param KLoc Argument location.
+  ///
+  void setUseKindKwLoc(SourceLocation KLoc) { KindKwLoc = KLoc; }
+
+  /// \brief Set chunk size.
+  ///
+  /// \param E Chunk size.
+  ///
+  void setChunkSize(Expr *E) { ChunkSize = E; }
+
+public:
+  /// \brief Build 'default' clause with argument \a A ('none' or 'shared').
+  ///
+  /// \param A Argument of the clause ('none' or 'shared').
+  /// \param ALoc Starting location of the argument.
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPUseClause(OpenMPUseClauseKind A, SourceLocation ALoc,
+                   SourceLocation StartLoc, SourceLocation LParenLoc,
+                   SourceLocation EndLoc, Expr *ChunkSize)
+      : OMPClause(OMPC_use, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        Kind(A), KindKwLoc(ALoc), ChunkSize(ChunkSize) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPUseClause()
+      : OMPClause(OMPC_use, SourceLocation(), SourceLocation()),
+        LParenLoc(SourceLocation()), Kind(OMPC_USE_unknown),
+        KindKwLoc(SourceLocation()), ChunkSize(nullptr) {}
+
+  /// \brief Sets the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+  /// \brief Returns the location of '('.
+  SourceLocation getLParenLoc() const { return LParenLoc; }
+
+  /// \brief Returns kind of the clause.
+  OpenMPUseClauseKind getUseKind() const { return Kind; }
+
+  /// \brief Returns location of clause kind.
+  SourceLocation getUseKindKwLoc() const { return KindKwLoc; }
+
+  /// \brief Get chunk size.
+  ///
+  Expr *getChunkSize() { return ChunkSize; }
+  /// \brief Get chunk size.
+  ///
+  const Expr *getChunkSize() const { return ChunkSize; }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_use;
+  }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+};
+
 /// \brief This represents 'proc_bind' clause in the '#pragma omp ...'
 /// directive.
 ///
@@ -1901,6 +1987,93 @@ public:
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == OMPC_reduction;
+  }
+};
+
+/// \brief This represents clause 'module' in the '#pragma omp ...'
+/// directives.
+///
+/// \code
+/// #pragma omp parallel use(hrw) module(multr.v)
+/// \endcode
+/// In this example directive '#pragma omp parallel' has clause 'module'
+///
+class OMPModuleClause : public OMPClause {
+  friend class OMPClauseReader;
+
+  /// \brief Location of '('.
+  SourceLocation LParenLoc;
+  /// \brief A name of custom operator.
+  std::string NameInfo;
+
+  /// \brief Set the location of '('.
+  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
+  /// \brief Set module StringRef.
+  void setModuleNameInfo(std::string S) { NameInfo = S; }
+
+public:
+  /// \brief Build 'module' clause.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param LParenLoc Location of '('.
+  /// \param EndLoc Ending location of the clause.
+  /// \param NameInfo Module custom operator.
+  ///
+  OMPModuleClause(SourceLocation StartLoc, SourceLocation LParenLoc,
+                  SourceLocation EndLoc, llvm::StringRef NameInfo)
+      : OMPClause(OMPC_module, StartLoc, EndLoc), LParenLoc(LParenLoc),
+        NameInfo(NameInfo.str()) {}
+
+  /// \brief Build an empty clause.
+  ///
+  explicit OMPModuleClause()
+      : OMPClause(OMPC_module, SourceLocation(), SourceLocation()),
+        NameInfo(nullptr) {}
+
+  /// \brief Get name info of the clause.
+  std::string getModuleNameInfo() { return NameInfo; }
+  /// \brief Get name info of the clause.
+  std::string getModuleNameInfo() const { return NameInfo; }
+  /// \brief Get location of '('.
+  SourceLocation getLParenLoc() { return LParenLoc; }
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_module;
+  }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
+  }
+};
+
+/// \brief This represents 'check' clause in the '#pragma omp ...' directive.
+///
+/// \code
+/// #pragma omp parallel for check
+/// \endcode
+/// In this example directive '#pragma omp parallel for' has 'check' clause.
+///
+class OMPCheckClause : public OMPClause {
+public:
+  /// \brief Build 'check' clause.
+  ///
+  /// \param StartLoc Starting location of the clause.
+  /// \param EndLoc Ending location of the clause.
+  ///
+  OMPCheckClause(SourceLocation StartLoc, SourceLocation EndLoc)
+      : OMPClause(OMPC_check, StartLoc, EndLoc) {}
+
+  /// \brief Build an empty clause.
+  ///
+  OMPCheckClause()
+      : OMPClause(OMPC_check, SourceLocation(), SourceLocation()) {}
+
+  static bool classof(const OMPClause *T) {
+    return T->getClauseKind() == OMPC_check;
+  }
+
+  child_range children() {
+    return child_range(child_iterator(), child_iterator());
   }
 };
 

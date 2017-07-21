@@ -3318,6 +3318,64 @@ CGOpenMPRuntime::createOffloadingBinaryDescriptorRegistration() {
   return RegFn;
 }
 
+void CGOpenMPRuntime::createOffloadConfiguration() {
+  int32_t sub_target_id;
+  auto *TgtConfigurationType = cast<llvm::StructType>(
+      CGM.getTypes().ConvertTypeForMem(getTgtConfigurationyQTy()));
+  llvm::LLVMContext &C = CGM.getModule().getContext();
+  llvm::Module &M = CGM.getModule();
+
+  // If we do not have entries, we dont need to do anything.
+  if (OffloadEntriesInfoManager.empty())
+    return;
+
+  if (!CGM.getLangOpts().OpenMPIsDevice &&
+      CGM.getLangOpts().OMPTargetTriples.empty())
+    return;
+
+  // Create constant string with the name.
+  llvm::Constant *StrPtrInit =
+      llvm::ConstantDataArray::getString(C, this->TgtFPGAModule);
+
+  llvm::GlobalVariable *Str =
+      new llvm::GlobalVariable(M, StrPtrInit->getType(), /*isConstant=*/true,
+                               llvm::GlobalValue::InternalLinkage, StrPtrInit,
+                               ".omp_offloading.configuration_module");
+  Str->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  llvm::Constant *StrPtr = llvm::ConstantExpr::getBitCast(Str, CGM.Int8PtrTy);
+
+  // Decide linkage type of the entry struct by looking at the linkage type of
+  // the variable. By default the linkage is Link-Once.
+  auto EntryLinkage = llvm::GlobalValue::WeakAnyLinkage;
+
+  // We can't have any padding between symbols, so we need to have 1-byte
+  // alignment.
+  auto Align = CharUnits::fromQuantity(1);
+
+  auto &Triple = CGM.getTarget().getTargetOpts().Triple;
+
+  if (Triple == "smartnic") {
+    sub_target_id = 9001;
+  } else if (Triple == "harp") {
+    sub_target_id = 9002;
+  } else {
+    sub_target_id = 0;
+  }
+
+  llvm::errs() << "sub_target_id: " << sub_target_id << "\n";
+  llvm::errs() << "triple       : " << Triple << "\n";
+
+  ConstantInitBuilder EntryBuilder(CGM);
+  auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
+  EntryInit.addInt(CGM.Int32Ty, sub_target_id);
+  EntryInit.add(StrPtr);
+  SmallString<128> EntryGblName(".omp_offloading.configuration.var");
+  llvm::GlobalVariable *Entry =
+      EntryInit.finishAndCreateGlobal(EntryGblName, Align,
+                                      /*constant*/ true, EntryLinkage);
+  Entry->setSection(".omp_offloading.configuration");
+}
+
 void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
                                          llvm::Constant *Addr, uint64_t Size,
                                          uint64_t Flags) {
@@ -3584,6 +3642,27 @@ static FieldDecl *addFieldToRecordDecl(ASTContext &C, DeclContext *DC,
   Field->setAccess(AS_public);
   DC->addDecl(Field);
   return Field;
+}
+
+QualType CGOpenMPRuntime::getTgtConfigurationyQTy() {
+
+  // Make sure the type of the entry is already created. This is the type we
+  // have to create:
+  // struct __tgt_configuration{
+  //   int32_t  sub_target_id;  // sub_target id.
+  //   char    *module;         // FPGA module name.
+  // };
+  if (TgtConfigurationQTy.isNull()) {
+    ASTContext &C = CGM.getContext();
+    auto *RD = C.buildImplicitRecord("__tgt_configuration");
+    RD->startDefinition();
+    addFieldToRecordDecl(
+        C, RD, C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/true));
+    addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
+    RD->completeDefinition();
+    TgtConfigurationQTy = C.getRecordType(RD);
+  }
+  return TgtConfigurationQTy;
 }
 
 QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
@@ -7367,6 +7446,8 @@ llvm::Function *CGOpenMPRuntime::emitRegistrationFunction() {
     OffloadEntriesInfoManager.registerDeviceFunctionEntryInfo(II->first());
   }
 
+  createOffloadConfiguration();
+
   // If we have offloading in the current module, we need to emit the entries
   // now and register the offloading descriptor.
   createOffloadEntriesAndInfoMetadata();
@@ -7990,3 +8071,25 @@ void CGOpenMPRuntime::registerTrackedFunction() {
   for (auto &GD : TrackedDecls)
     registerTargetFunctionDefinition(GD.second);
 }
+
+void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
+  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
+
+  if (C) {
+    if (C->getUseKind() == OMPC_USE_hrw) {
+      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
+      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
+
+      if (c_module) {
+        this->TgtFPGAModule = c_module->getModuleNameInfo();
+      } else {
+        llvm::errs() << "module clause not specified" << "\n";
+      }
+
+      // if (c_check) {
+      //   llvm::errs() << "check!\n";
+      // }
+    }
+  }
+}
+

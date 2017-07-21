@@ -3039,6 +3039,9 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     OMPCancelStackRAII CancelRegion(CGF, OMPD_parallel_for, S.hasCancel());
     CGF.EmitOMPWorksharingLoop(S);
   };
+
+  CGM.getOpenMPRuntime().createFPGAInfo(S);
+
   emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen);
 }
 
@@ -3999,10 +4002,12 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_firstprivate:
   case OMPC_lastprivate:
   case OMPC_reduction:
+  case OMPC_module:
   case OMPC_safelen:
   case OMPC_simdlen:
   case OMPC_collapse:
   case OMPC_default:
+  case OMPC_use:
   case OMPC_seq_cst:
   case OMPC_shared:
   case OMPC_linear:
@@ -4014,6 +4019,7 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_schedule:
   case OMPC_ordered:
   case OMPC_nowait:
+  case OMPC_check:
   case OMPC_untied:
   case OMPC_threadprivate:
   case OMPC_depend:

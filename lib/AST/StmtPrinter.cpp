@@ -614,6 +614,12 @@ void OMPClausePrinter::VisitOMPIfClause(OMPIfClause *Node) {
   OS << ")";
 }
 
+void OMPClausePrinter::VisitOMPModuleClause(OMPModuleClause *Node) {
+  OS << "module(";
+  OS << Node->getModuleNameInfo();
+  OS << ")";
+}
+
 void OMPClausePrinter::VisitOMPFinalClause(OMPFinalClause *Node) {
   OS << "final(";
   Node->getCondition()->printPretty(OS, nullptr, Policy, 0);
@@ -648,6 +654,16 @@ void OMPClausePrinter::VisitOMPDefaultClause(OMPDefaultClause *Node) {
   OS << "default("
      << getOpenMPSimpleClauseTypeName(OMPC_default, Node->getDefaultKind())
      << ")";
+}
+
+void OMPClausePrinter::VisitOMPUseClause(OMPUseClause *Node) {
+  OS << "use("
+     << getOpenMPSimpleClauseTypeName(OMPC_use, Node->getUseKind());
+  if (auto *E = Node->getChunkSize()) {
+    OS << ", ";
+    E->printPretty(OS, nullptr, Policy);
+  }
+  OS << ")";
 }
 
 void OMPClausePrinter::VisitOMPProcBindClause(OMPProcBindClause *Node) {
@@ -699,6 +715,10 @@ void OMPClausePrinter::VisitOMPNogroupClause(OMPNogroupClause *) {
 
 void OMPClausePrinter::VisitOMPMergeableClause(OMPMergeableClause *) {
   OS << "mergeable";
+}
+
+void OMPClausePrinter::VisitOMPCheckClause(OMPCheckClause *) {
+  OS << "check";
 }
 
 void OMPClausePrinter::VisitOMPReadClause(OMPReadClause *) { OS << "read"; }
