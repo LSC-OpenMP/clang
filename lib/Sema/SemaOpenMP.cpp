@@ -6997,6 +6997,8 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
     break;
   case OMPC_if:
   case OMPC_default:
+  case OMPC_use:
+  case OMPC_module:
   case OMPC_proc_bind:
   case OMPC_schedule:
   case OMPC_private:
@@ -7009,6 +7011,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_copyin:
   case OMPC_copyprivate:
   case OMPC_nowait:
+  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_threadprivate:
@@ -7322,11 +7325,14 @@ OMPClause *Sema::ActOnOpenMPSimpleClause(
         ActOnOpenMPDefaultClause(static_cast<OpenMPDefaultClauseKind>(Argument),
                                  ArgumentLoc, StartLoc, LParenLoc, EndLoc);
     break;
+  case OMPC_use:
+    break;
   case OMPC_proc_bind:
     Res = ActOnOpenMPProcBindClause(
         static_cast<OpenMPProcBindClauseKind>(Argument), ArgumentLoc, StartLoc,
         LParenLoc, EndLoc);
     break;
+  case OMPC_module:
   case OMPC_if:
   case OMPC_final:
   case OMPC_num_threads:
@@ -7345,6 +7351,7 @@ OMPClause *Sema::ActOnOpenMPSimpleClause(
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
+  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_threadprivate:
@@ -7433,6 +7440,58 @@ OMPClause *Sema::ActOnOpenMPDefaultClause(OpenMPDefaultClauseKind Kind,
       OMPDefaultClause(Kind, KindKwLoc, StartLoc, LParenLoc, EndLoc);
 }
 
+OMPClause *Sema::ActOnOpenMPUseClause(OpenMPUseClauseKind Kind,
+                                      SourceLocation KindKwLoc,
+                                      SourceLocation StartLoc,
+                                      SourceLocation LParenLoc,
+                                      SourceLocation EndLoc,
+                                      Expr *ChunkSize) {
+  if (Kind == OMPC_USE_unknown) {
+    static_assert(OMPC_USE_unknown > 0,
+                  "OMPC_USE_unknown not greater than 0");
+    Diag(KindKwLoc, diag::err_omp_unexpected_clause_value)
+        << getListOfPossibleValues(OMPC_use, /*First=*/0,
+                                   /*Last=*/OMPC_USE_unknown)
+        << getOpenMPClauseName(OMPC_use);
+    return nullptr;
+  }
+
+  Expr *ValExpr = ChunkSize;
+  if (ChunkSize) {
+    if (!ChunkSize->isValueDependent() && !ChunkSize->isTypeDependent() &&
+        !ChunkSize->isInstantiationDependent() &&
+        !ChunkSize->containsUnexpandedParameterPack()) {
+      SourceLocation ChunkSizeLoc = ChunkSize->getLocStart();
+      ExprResult Val =
+          PerformOpenMPImplicitIntegerConversion(ChunkSizeLoc, ChunkSize);
+      if (Val.isInvalid())
+        return nullptr;
+
+      ValExpr = Val.get();
+
+      // OpenMP [2.7.1, Restrictions]
+      //  chunk_size must be a loop invariant integer expression with a positive
+      //  value.
+      llvm::APSInt Result;
+      if (ValExpr->isIntegerConstantExpr(Result, Context)) {
+        if (Result.isSigned() && !Result.isStrictlyPositive()) {
+          Diag(ChunkSizeLoc, diag::err_omp_negative_expression_in_clause)
+              << "schedule" << 1 << ChunkSize->getSourceRange();
+          return nullptr;
+        }
+      } /*else if (isParallelOrTaskRegion(DSAStack->getCurrentDirective()) &&
+                 !CurContext->isDependentContext()) {
+        llvm::MapVector<Expr *, DeclRefExpr *> Captures;
+        ValExpr = tryBuildCapture(*this, ValExpr, Captures).get();
+        HelperValStmt = buildPreInits(Context, Captures);
+      }*/
+    }
+  }
+
+  return new (Context)
+      OMPUseClause(Kind, KindKwLoc, StartLoc, LParenLoc, EndLoc, ValExpr);
+}
+
 OMPClause *Sema::ActOnOpenMPProcBindClause(OpenMPProcBindClauseKind Kind,
                                            SourceLocation KindKwLoc,
                                            SourceLocation StartLoc,
@@ -7486,12 +7545,18 @@ OMPClause *Sema::ActOnOpenMPSingleExprWithArgClause(
         StartLoc, LParenLoc, ArgumentLoc[Modifier], ArgumentLoc[DefaultmapKind],
         EndLoc);
     break;
+  case OMPC_module:
   case OMPC_final:
   case OMPC_num_threads:
   case OMPC_safelen:
   case OMPC_simdlen:
   case OMPC_collapse:
   case OMPC_default:
+  case OMPC_use:
+    Res =
+        ActOnOpenMPUseClause(static_cast<OpenMPUseClauseKind>(Argument[0]),
+                             ArgumentLoc[0], StartLoc, LParenLoc, EndLoc, Expr);
+    break;
   case OMPC_proc_bind:
   case OMPC_private:
   case OMPC_firstprivate:
@@ -7504,6 +7569,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprWithArgClause(
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
+  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_threadprivate:
@@ -7657,6 +7723,9 @@ OMPClause *Sema::ActOnOpenMPClause(OpenMPClauseKind Kind,
   case OMPC_nowait:
     Res = ActOnOpenMPNowaitClause(StartLoc, EndLoc);
     break;
+  case OMPC_check:
+    Res = ActOnOpenMPCheckClause(StartLoc, EndLoc);
+    break;
   case OMPC_untied:
     Res = ActOnOpenMPUntiedClause(StartLoc, EndLoc);
     break;
@@ -7699,11 +7768,13 @@ OMPClause *Sema::ActOnOpenMPClause(OpenMPClauseKind Kind,
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
+  case OMPC_module:
   case OMPC_linear:
   case OMPC_aligned:
   case OMPC_copyin:
   case OMPC_copyprivate:
   case OMPC_default:
+  case OMPC_use:
   case OMPC_proc_bind:
   case OMPC_threadprivate:
   case OMPC_flush:
@@ -7735,6 +7806,11 @@ OMPClause *Sema::ActOnOpenMPNowaitClause(SourceLocation StartLoc,
                                          SourceLocation EndLoc) {
   DSAStack->setNowaitRegion();
   return new (Context) OMPNowaitClause(StartLoc, EndLoc);
+}
+
+OMPClause *Sema::ActOnOpenMPCheckClause(SourceLocation StartLoc,
+                                        SourceLocation EndLoc) {
+  return new (Context) OMPCheckClause(StartLoc, EndLoc);
 }
 
 OMPClause *Sema::ActOnOpenMPUntiedClause(SourceLocation StartLoc,
@@ -7862,6 +7938,7 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
         ActOnOpenMPInReductionClause(VarList, StartLoc, LParenLoc, ColonLoc,
                                      EndLoc, ReductionIdScopeSpec, ReductionId);
     break;
+  case OMPC_module:
   case OMPC_if:
   case OMPC_final:
   case OMPC_num_threads:
@@ -7869,6 +7946,7 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
   case OMPC_simdlen:
   case OMPC_collapse:
   case OMPC_default:
+  case OMPC_use:
   case OMPC_proc_bind:
   case OMPC_schedule:
   case OMPC_ordered:
@@ -9372,6 +9450,17 @@ OMPClause *Sema::ActOnOpenMPReductionClause(
       ReductionIdScopeSpec.getWithLocInContext(Context), ReductionId, Privates,
       LHSs, RHSs, ReductionOps, buildPreInits(Context, ExprCaptures),
       buildPostUpdate(*this, ExprPostUpdates));
+}
+
+OMPClause *Sema::ActOnOpenMPModuleClause(llvm::StringRef NameInfo,
+                                         SourceLocation StartLoc,
+                                         SourceLocation LParenLoc,
+                                         SourceLocation EndLoc) {
+
+  // DSAStackTy::DSAVarData DVar = DSAStack->getTopDSA(D, false);
+
+  return new (Context)
+      OMPModuleClause(StartLoc, LParenLoc, EndLoc, NameInfo);
 }
 
 bool Sema::CheckOpenMPLinearModifier(OpenMPLinearClauseKind LinKind,

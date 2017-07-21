@@ -84,6 +84,11 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
 #define OPENMP_DEFAULT_KIND(Name) .Case(#Name, OMPC_DEFAULT_##Name)
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_DEFAULT_unknown);
+  case OMPC_use:
+    return llvm::StringSwitch<OpenMPUseClauseKind>(Str)
+#define OPENMP_USE_KIND(Name) .Case(#Name, OMPC_USE_##Name)
+#include "clang/Basic/OpenMPKinds.def"
+        .Default(OMPC_USE_unknown);
   case OMPC_proc_bind:
     return llvm::StringSwitch<OpenMPProcBindClauseKind>(Str)
 #define OPENMP_PROC_BIND_KIND(Name) .Case(#Name, OMPC_PROC_BIND_##Name)
@@ -125,6 +130,7 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   .Case(#Name, static_cast<unsigned>(OMPC_DEFAULTMAP_MODIFIER_##Name))
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_DEFAULTMAP_unknown);
+  case OMPC_module:
   case OMPC_lastprivate:
     return llvm::StringSwitch<OpenMPLastprivateClauseKind>(Str)
 #define OPENMP_LASTPRIVATE_MODIFIER(Name) .Case(#Name, OMPC_LASTPRIVATE_##Name)
@@ -147,6 +153,7 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
+  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_flush:
@@ -190,6 +197,16 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'default' clause type");
+  case OMPC_use:
+    switch (Type) {
+    case OMPC_USE_unknown:
+      return "unknown";
+#define OPENMP_USE_KIND(Name)                                              \
+  case OMPC_USE_##Name:                                                    \
+    return #Name;
+#include "clang/Basic/OpenMPKinds.def"
+    }
+    llvm_unreachable("Invalid OpenMP 'use' clause type");
   case OMPC_proc_bind:
     switch (Type) {
     case OMPC_PROC_BIND_unknown:
@@ -270,6 +287,7 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'schedule' clause type");
+  case OMPC_module:
   case OMPC_lastprivate:
     switch (Type) {
     case OMPC_LASTPRIVATE_unknown:
@@ -299,6 +317,7 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
+  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_flush:

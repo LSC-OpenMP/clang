@@ -1772,6 +1772,12 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_default:
     C = new (Context) OMPDefaultClause();
     break;
+  case OMPC_use:
+    C = new (Context) OMPUseClause();
+    break;
+  case OMPC_module:
+    C = new (Context) OMPModuleClause();
+    break;
   case OMPC_proc_bind:
     C = new (Context) OMPProcBindClause();
     break;
@@ -1783,6 +1789,9 @@ OMPClause *OMPClauseReader::readClause() {
     break;
   case OMPC_nowait:
     C = new (Context) OMPNowaitClause();
+    break;
+  case OMPC_check:
+    C = new (Context) OMPCheckClause();
     break;
   case OMPC_untied:
     C = new (Context) OMPUntiedClause();
@@ -1951,6 +1960,11 @@ void OMPClauseReader::VisitOMPIfClause(OMPIfClause *C) {
   C->setLParenLoc(Reader->ReadSourceLocation());
 }
 
+void OMPClauseReader::VisitOMPModuleClause(OMPModuleClause *C) {
+  C->setModuleNameInfo(Reader->ReadString());
+  C->setLParenLoc(Reader->ReadSourceLocation());
+}
+
 void OMPClauseReader::VisitOMPFinalClause(OMPFinalClause *C) {
   C->setCondition(Reader->Record.readSubExpr());
   C->setLParenLoc(Reader->ReadSourceLocation());
@@ -1984,6 +1998,12 @@ void OMPClauseReader::VisitOMPDefaultClause(OMPDefaultClause *C) {
   C->setDefaultKindKwLoc(Reader->ReadSourceLocation());
 }
 
+void OMPClauseReader::VisitOMPUseClause(OMPUseClause *C) {
+  C->setUseKind(static_cast<OpenMPUseClauseKind>(Reader->Record.readInt()));
+  C->setLParenLoc(Reader->ReadSourceLocation());
+  C->setUseKindKwLoc(Reader->ReadSourceLocation());
+}
+
 void OMPClauseReader::VisitOMPProcBindClause(OMPProcBindClause *C) {
   C->setProcBindKind(
        static_cast<OpenMPProcBindClauseKind>(Reader->Record.readInt()));
@@ -2013,6 +2033,8 @@ void OMPClauseReader::VisitOMPOrderedClause(OMPOrderedClause *C) {
 }
 
 void OMPClauseReader::VisitOMPNowaitClause(OMPNowaitClause *) {}
+
+void OMPClauseReader::VisitOMPCheckClause(OMPCheckClause *) {}
 
 void OMPClauseReader::VisitOMPUntiedClause(OMPUntiedClause *) {}
 
