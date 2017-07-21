@@ -280,26 +280,65 @@ static Address castValueFromUintptr(CodeGenFunction &CGF, QualType DstType,
   return TmpAddr;
 }
 
-llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
-    const CapturedStmt &S, bool UseCapturedArgumentsOnly, unsigned CaptureLevel,
-    unsigned ImplicitParamStop, bool NonAliasedMaps) {
+namespace {
+  /// Contains required data for proper outlined function codegen.
+  struct FunctionOptions {
+    /// Captured statement for which the function is generated.
+    const CapturedStmt *S = nullptr;
+    /// Should function use only captured fields for codegen.
+    bool UseCapturedArgumentsOnly = false;
+    /// Level of captured function.
+    unsigned CaptureLevel = 0;
+    /// Index of the implicit parameter.
+    unsigned ImplicitParamStop = 0;
+    /// Arguments are not aliased.
+    bool NonAliasedMaps = true;
+    /// true if cast to/from  UIntPtr is required for variables captured by
+    /// value.
+    bool UIntPtrCastRequired = true;
+    /// true if only casted argumefnts must be registered as local args or VLA
+    /// sizes.
+    bool RegisterCastedArgsOnly = false;
+    /// Name of the generated function.
+    StringRef FunctionName;
+    explicit FunctionOptions(const CapturedStmt *S,
+                             bool UseCapturedArgumentsOnly,
+                             unsigned CaptureLevel, unsigned ImplicitParamStop,
+                             bool NonAliasedMaps, bool UIntPtrCastRequired,
+                             bool RegisterCastedArgsOnly,
+                             StringRef FunctionName)
+        : S(S), UseCapturedArgumentsOnly(UseCapturedArgumentsOnly),
+          CaptureLevel(CaptureLevel), ImplicitParamStop(ImplicitParamStop),
+          NonAliasedMaps(NonAliasedMaps),
+          UIntPtrCastRequired(UIntPtrCastRequired),
+          RegisterCastedArgsOnly(UIntPtrCastRequired && RegisterCastedArgsOnly),
+          FunctionName(FunctionName) {}
+  };
+}
 
-  assert(
-      CapturedStmtInfo &&
-      "CapturedStmtInfo should be set when generating the captured function");
-  const CapturedDecl *CD = S.getCapturedDecl();
-  const RecordDecl *RD = S.getCapturedRecordDecl();
+static std::pair<llvm::Function *, bool> emitOutlinedFunctionPrologue(
+    CodeGenFunction &CGF, FunctionArgList &Args,
+    llvm::DenseMap<const Decl *, std::pair<const VarDecl *, Address>>
+        &LocalAddrs,
+    llvm::DenseMap<const Decl *, std::pair<const Expr *, llvm::Value *>>
+        &VLASizes,
+    llvm::Value *&CXXThisValue, const FunctionOptions &FO) {
+  const CapturedDecl *CD = FO.S->getCapturedDecl();
+  const RecordDecl *RD = FO.S->getCapturedRecordDecl();
   assert(CD->hasBody() && "missing CapturedDecl body");
 
+  CXXThisValue = nullptr;
   // Build the argument list.
+  CodeGenModule &CGM = CGF.CGM;
   ASTContext &Ctx = CGM.getContext();
-  FunctionArgList Args;
+  unsigned ImplicitParamStop = FO.ImplicitParamStop;
+  bool HasUIntPtrArgs = false;
   if (ImplicitParamStop == 0)
     ImplicitParamStop = CD->getContextParamPosition();
-  if (!UseCapturedArgumentsOnly)
+  if (!FO.UseCapturedArgumentsOnly)
     Args.append(CD->param_begin(),
                 std::next(CD->param_begin(), ImplicitParamStop));
-  auto I = S.captures().begin();
+  auto I = FO.S->captures().begin();
   for (auto *FD : RD->fields()) {
     QualType ArgType = FD->getType();
     IdentifierInfo *II = nullptr;
@@ -310,7 +349,7 @@ llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
       if (auto *C = dyn_cast<OMPCapturedExprDecl>(CapVar)) {
         // Check to see if the capture is to be a parameter in the
         // outlined function at this level.
-        if (C->getCaptureLevel() < CaptureLevel) {
+        if (C->getCaptureLevel() < FO.CaptureLevel) {
           ++I;
           continue;
         }
@@ -323,27 +362,29 @@ llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
     // deal with pointers. We can pass in the same way the VLA type sizes to the
     // outlined function.
     if ((I->capturesVariableByCopy() && !ArgType->isAnyPointerType()) ||
-        I->capturesVariableArrayType())
-      ArgType = Ctx.getUIntPtrType();
+        I->capturesVariableArrayType()) {
+      HasUIntPtrArgs = true;
+      if (FO.UIntPtrCastRequired)
+        ArgType = Ctx.getUIntPtrType();
+    }
 
     if (I->capturesVariable() || I->capturesVariableByCopy()) {
       CapVar = I->getCapturedVar();
       II = CapVar->getIdentifier();
     } else if (I->capturesThis())
-      II = &getContext().Idents.get("this");
+      II = &Ctx.Idents.get("this");
     else {
       assert(I->capturesVariableArrayType());
-      II = &getContext().Idents.get("vla");
+      II = &Ctx.Idents.get("vla");
     }
-    if (ArgType->isVariablyModifiedType()) {
-      ArgType =
-          getCanonicalParamType(getContext(), ArgType.getNonReferenceType());
-    }
-    if (NonAliasedMaps &&
+    if (ArgType->isVariablyModifiedType())
+      ArgType = getCanonicalParamType(Ctx, ArgType.getNonReferenceType());
+    if (FO.NonAliasedMaps &&
         (ArgType->isAnyPointerType() || ArgType->isReferenceType()))
       ArgType = ArgType.withRestrict();
-    Args.push_back(ImplicitParamDecl::Create(getContext(), nullptr,
-                                             FD->getLocation(), II, ArgType));
+    Args.push_back(ImplicitParamDecl::Create(Ctx, /*DC=*/nullptr,
+                                             FD->getLocation(), II, ArgType,
+                                             ImplicitParamDecl::Other));
     ++I;
   }
   Args.append(
@@ -356,25 +397,25 @@ llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
       CGM.getTypes().arrangeBuiltinFunctionDeclaration(Ctx.VoidTy, Args);
   llvm::FunctionType *FuncLLVMTy = CGM.getTypes().GetFunctionType(FuncInfo);
 
-  llvm::Function *F = llvm::Function::Create(
-      FuncLLVMTy, llvm::GlobalValue::InternalLinkage,
-      CapturedStmtInfo->getHelperName(), &CGM.getModule());
+  llvm::Function *F =
+      llvm::Function::Create(FuncLLVMTy, llvm::GlobalValue::InternalLinkage,
+                             FO.FunctionName, &CGM.getModule());
   CGM.SetInternalFunctionAttributes(CD, F, FuncInfo);
   if (CD->isNothrow())
     F->addFnAttr(llvm::Attribute::NoUnwind);
 
   // Generate the function.
-  StartFunction(CD, Ctx.VoidTy, F, FuncInfo, Args, CD->getLocation(),
-                CD->getBody()->getLocStart());
-  unsigned Cnt = UseCapturedArgumentsOnly ? 0 : ImplicitParamStop;
-  I = S.captures().begin();
+  CGF.StartFunction(CD, Ctx.VoidTy, F, FuncInfo, Args, CD->getLocation(),
+                    CD->getBody()->getLocStart());
+  unsigned Cnt = FO.UseCapturedArgumentsOnly ? 0 : ImplicitParamStop;
+  I = FO.S->captures().begin();
   for (auto *FD : RD->fields()) {
     if (I->capturesVariable() || I->capturesVariableByCopy()) {
       auto *Var = I->getCapturedVar();
       if (auto *C = dyn_cast<OMPCapturedExprDecl>(Var)) {
         // Check to see if the capture is to be a parameter in the
         // outlined function at this level.
-        if (C->getCaptureLevel() < CaptureLevel) {
+        if (C->getCaptureLevel() < FO.CaptureLevel) {
           ++I;
           continue;
         }
@@ -385,72 +426,154 @@ llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
     // use the value that we get from the arguments.
     if (I->capturesVariableByCopy() && FD->getType()->isAnyPointerType()) {
       const VarDecl *CurVD = I->getCapturedVar();
-      Address LocalAddr = GetAddrOfLocalVar(Args[Cnt]);
+      Address LocalAddr = CGF.GetAddrOfLocalVar(Args[Cnt]);
       // If the variable is a reference we need to materialize it here.
       if (CurVD->getType()->isReferenceType()) {
-        Address RefAddr = CreateMemTemp(CurVD->getType(), getPointerAlign(),
-                                        ".materialized_ref");
-        EmitStoreOfScalar(LocalAddr.getPointer(), RefAddr, /*Volatile=*/false,
-                          CurVD->getType());
+        Address RefAddr = CGF.CreateMemTemp(
+            CurVD->getType(), CGF.getPointerAlign(), ".materialized_ref");
+        CGF.EmitStoreOfScalar(LocalAddr.getPointer(), RefAddr,
+                              /*Volatile=*/false, CurVD->getType());
         LocalAddr = RefAddr;
       }
-      setAddrOfLocalVar(CurVD, LocalAddr);
+      if (!FO.RegisterCastedArgsOnly)
+        LocalAddrs.insert({Args[Cnt], {CurVD, LocalAddr}});
       ++Cnt;
       ++I;
       continue;
     }
 
     LValue ArgLVal =
-        MakeAddrLValue(GetAddrOfLocalVar(Args[Cnt]), Args[Cnt]->getType(),
-                       AlignmentSource::Decl);
+        CGF.MakeAddrLValue(CGF.GetAddrOfLocalVar(Args[Cnt]),
+                           Args[Cnt]->getType(), AlignmentSource::Decl);
     if (FD->hasCapturedVLAType()) {
-      LValue CastedArgLVal =
-          MakeAddrLValue(castValueFromUintptr(*this, FD->getType(),
-                                              Args[Cnt]->getName(), ArgLVal),
-                         FD->getType(), AlignmentSource::Decl);
+      if (FO.UIntPtrCastRequired) {
+        ArgLVal = CGF.MakeAddrLValue(castValueFromUintptr(CGF, FD->getType(),
+                                                          Args[Cnt]->getName(),
+                                                          ArgLVal),
+                                     FD->getType(), AlignmentSource::Decl);
+      }
       auto *ExprArg =
-          EmitLoadOfLValue(CastedArgLVal, SourceLocation()).getScalarVal();
+          CGF.EmitLoadOfLValue(ArgLVal, SourceLocation()).getScalarVal();
       auto VAT = FD->getCapturedVLAType();
-      VLASizeMap[VAT->getSizeExpr()] = ExprArg;
+      VLASizes.insert({Args[Cnt], {VAT->getSizeExpr(), ExprArg}});
     } else if (I->capturesVariable()) {
       auto *Var = I->getCapturedVar();
       QualType VarTy = Var->getType();
       Address ArgAddr = ArgLVal.getAddress();
       if (!VarTy->isReferenceType()) {
         if (ArgLVal.getType()->isLValueReferenceType()) {
-          ArgAddr = EmitLoadOfReference(
+          ArgAddr = CGF.EmitLoadOfReference(
               ArgAddr, ArgLVal.getType()->castAs<ReferenceType>());
         } else if (!VarTy->isVariablyModifiedType() || !VarTy->isPointerType()) {
           assert(ArgLVal.getType()->isPointerType());
-          ArgAddr = EmitLoadOfPointer(
+          ArgAddr = CGF.EmitLoadOfPointer(
               ArgAddr, ArgLVal.getType()->castAs<PointerType>());
         }
       }
-      setAddrOfLocalVar(
-          Var, Address(ArgAddr.getPointer(), getContext().getDeclAlign(Var)));
+      if (!FO.RegisterCastedArgsOnly) {
+        LocalAddrs.insert(
+            {Args[Cnt],
+             {Var, Address(ArgAddr.getPointer(), Ctx.getDeclAlign(Var))}});
+      }
     } else if (I->capturesVariableByCopy()) {
       assert(!FD->getType()->isAnyPointerType() &&
              "Not expecting a captured pointer.");
       auto *Var = I->getCapturedVar();
       QualType VarTy = Var->getType();
-      setAddrOfLocalVar(Var, castValueFromUintptr(*this, FD->getType(),
-                                                  Args[Cnt]->getName(), ArgLVal,
-                                                  VarTy->isReferenceType()));
+      LocalAddrs.insert(
+          {Args[Cnt],
+           {Var,
+            FO.UIntPtrCastRequired
+                ? castValueFromUintptr(CGF, FD->getType(), Args[Cnt]->getName(),
+                                       ArgLVal, VarTy->isReferenceType())
+                : ArgLVal.getAddress()}});
     } else {
       // If 'this' is captured, load it into CXXThisValue.
       assert(I->capturesThis());
-      CXXThisValue =
-          EmitLoadOfLValue(ArgLVal, Args[Cnt]->getLocation()).getScalarVal();
+      CXXThisValue = CGF.EmitLoadOfLValue(ArgLVal, Args[Cnt]->getLocation())
+                         .getScalarVal();
+      LocalAddrs.insert({Args[Cnt], {nullptr, ArgLVal.getAddress()}});
     }
     ++Cnt;
     ++I;
   }
 
+  return {F, HasUIntPtrArgs};
+}
+
+llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
+    const CapturedStmt &S, bool UseCapturedArgumentsOnly, unsigned CaptureLevel,
+    unsigned ImplicitParamStop, bool NonAliasedMaps) {
+  assert(
+      CapturedStmtInfo &&
+      "CapturedStmtInfo should be set when generating the captured function");
+  const CapturedDecl *CD = S.getCapturedDecl();
+  // Build the argument list.
+  bool NeedWrapperFunction =
+      getDebugInfo() &&
+      CGM.getCodeGenOpts().getDebugInfo() >= codegenoptions::LimitedDebugInfo;
+  FunctionArgList Args;
+  llvm::DenseMap<const Decl *, std::pair<const VarDecl *, Address>> LocalAddrs;
+  llvm::DenseMap<const Decl *, std::pair<const Expr *, llvm::Value *>> VLASizes;
+  FunctionOptions FO(&S, UseCapturedArgumentsOnly, CaptureLevel,
+                     ImplicitParamStop, NonAliasedMaps, !NeedWrapperFunction,
+                     /*RegisterCastedArgsOnly=*/false,
+                     CapturedStmtInfo->getHelperName());
+  llvm::Function *F;
+  bool HasUIntPtrArgs;
+  std::tie(F, HasUIntPtrArgs) = emitOutlinedFunctionPrologue(
+      *this, Args, LocalAddrs, VLASizes, CXXThisValue, FO);
+  for (const auto &LocalAddrPair : LocalAddrs) {
+    if (LocalAddrPair.second.first) {
+      setAddrOfLocalVar(LocalAddrPair.second.first,
+                        LocalAddrPair.second.second);
+    }
+  }
+  for (const auto &VLASizePair : VLASizes)
+    VLASizeMap[VLASizePair.second.first] = VLASizePair.second.second;
   PGO.assignRegionCounters(GlobalDecl(CD), F);
   CapturedStmtInfo->EmitBody(*this, CD->getBody());
   FinishFunction(CD->getBodyRBrace());
+  if (!NeedWrapperFunction || !HasUIntPtrArgs)
+    return F;
 
-  return F;
+  FunctionOptions WrapperFO(&S, UseCapturedArgumentsOnly, CaptureLevel,
+                            ImplicitParamStop, NonAliasedMaps,
+                            /*UIntPtrCastRequired=*/true,
+                            /*RegisterCastedArgsOnly=*/true,
+                            ".nondebug_wrapper.");
+  CodeGenFunction WrapperCGF(CGM, /*suppressNewContext=*/true);
+  WrapperCGF.disableDebugInfo();
+  Args.clear();
+  LocalAddrs.clear();
+  VLASizes.clear();
+  llvm::Function *WrapperF =
+      emitOutlinedFunctionPrologue(WrapperCGF, Args, LocalAddrs, VLASizes,
+                                   WrapperCGF.CXXThisValue, WrapperFO).first;
+  llvm::SmallVector<llvm::Value *, 4> CallArgs;
+  for (const auto *Arg : Args) {
+    llvm::Value *CallArg;
+    auto I = LocalAddrs.find(Arg);
+    if (I != LocalAddrs.end()) {
+      LValue LV = WrapperCGF.MakeAddrLValue(I->second.second, Arg->getType(),
+                                            AlignmentSource::Decl);
+      CallArg = WrapperCGF.EmitLoadOfScalar(LV, SourceLocation());
+    } else {
+      auto EI = VLASizes.find(Arg);
+      if (EI != VLASizes.end())
+        CallArg = EI->second.second;
+      else {
+        LValue LV =
+            WrapperCGF.MakeAddrLValue(WrapperCGF.GetAddrOfLocalVar(Arg),
+                                      Arg->getType(), AlignmentSource::Decl);
+        CallArg = WrapperCGF.EmitLoadOfScalar(LV, SourceLocation());
+      }
+    }
+    CallArgs.emplace_back(CallArg);
+  }
+  WrapperCGF.Builder.CreateCall(F, CallArgs);
+  WrapperCGF.FinishFunction();
+  return WrapperF;
 }
 
 //===----------------------------------------------------------------------===//
@@ -986,6 +1109,11 @@ void CodeGenFunction::EmitOMPLastprivateClauseFinal(
     auto IRef = C->varlist_begin();
     auto ISrcRef = C->source_exprs().begin();
     auto IDestRef = C->destination_exprs().begin();
+    // Arpith
+    // if (C->getModifier() == OMPC_LASTPRIVATE_conditional)
+    //   printf(" ---------> This is a conditional lastprivate!\n");
+    // else
+    //   printf(" ---------> This is a lastprivate!\n");
     for (auto *AssignOp : C->assignment_ops()) {
       auto *PrivateVD = cast<VarDecl>(cast<DeclRefExpr>(*IRef)->getDecl());
       QualType Type = PrivateVD->getType();
@@ -1913,8 +2041,11 @@ void CodeGenFunction::EmitOMPSimdLoop(const OMPLoopDirective &S,
 }
 
 void CodeGenFunction::EmitOMPSimdDirective(const OMPSimdDirective &S) {
+#if 0
   bool OutlinedSimd =
       CGM.getLangOpts().OpenMPIsDevice && CGM.getTriple().isNVPTX();
+#endif
+  bool OutlinedSimd = false;
   EmitOMPSimdLoop(S, OutlinedSimd);
 }
 
@@ -3153,6 +3284,46 @@ void CodeGenFunction::EmitOMPFlushDirective(const OMPFlushDirective &S) {
 void CodeGenFunction::EmitOMPDistributeLoop(
     const OMPLoopDirective &S,
     const RegionCodeGenTy &CodeGenDistributeLoopContent) {
+  // Insert an omp.init.ds block at the end of the entry header before any branch.
+  // Check if function already has an omp.init.ds block
+  bool hasOMPInitDSBlock = false;
+  for (auto &BB : CurFn->getBasicBlockList())
+    if (BB.getName() == "omp.init.ds"){
+      hasOMPInitDSBlock = true;
+      break;
+    }
+
+  // Emit omp.init.ds block if we have not emitted one before
+  if (!hasOMPInitDSBlock) {
+    llvm::BasicBlock *InitDS;
+    llvm::BasicBlock *AfterHeaderBB;
+    llvm::BasicBlock *HeaderBB = &CurFn->front();
+    llvm::Instruction *OldBI = HeaderBB->getTerminator();
+    llvm::Instruction *InsertPt = nullptr;
+    if (OldBI){
+      InsertPt = OldBI->getPrevNode();
+      llvm::BasicBlock *InitDSCont = createBasicBlock("omp.init.continue");
+      EmitBranch(InitDSCont);
+      InitDS = createBasicBlock("omp.init.ds");
+      EmitBlock(InitDS);
+      EmitBranch(InitDS);
+      llvm::Instruction *NewTerminator = InitDS->getTerminator();
+      AfterHeaderBB = HeaderBB->getNextNode();
+      NewTerminator->moveBefore(OldBI);
+      Builder.SetInsertPoint(InitDS);
+      EmitBranch(HeaderBB);
+      NewTerminator = InitDS->getTerminator();
+      OldBI->moveBefore(NewTerminator);
+      NewTerminator->eraseFromParent();
+      EmitBlock(InitDSCont);
+      InitDS->moveAfter(HeaderBB);
+    } else {
+      InitDS = createBasicBlock("omp.init.ds");
+      EmitBranch(InitDS);
+      EmitBlock(InitDS);
+    }
+  }
+
   // Emit the loop iteration variable.
   auto IVExpr = cast<DeclRefExpr>(S.getIterationVariable());
   auto IVDecl = cast<VarDecl>(IVExpr->getDecl());
@@ -3398,6 +3569,7 @@ void CodeGenFunction::EmitOMPDistributeParallelForDirective(
                                         PrePostActionTy &) {
     CGF.EmitOMPDistributeLoop(S, CGParallelFor);
   };
+
   OMPLexicalScope Scope(*this, S, /*AsInlined=*/true);
   OMPCancelStackRAII CancelRegion(*this, OMPD_distribute_parallel_for,
                                   /*HasCancel=*/false);
@@ -3551,18 +3723,23 @@ static std::pair<bool, RValue> emitOMPAtomicRMW(CodeGenFunction &CGF, LValue X,
                                                 BinaryOperatorKind BO,
                                                 llvm::AtomicOrdering AO,
                                                 bool IsXLHSInRHSPart) {
-  auto &Context = CGF.CGM.getContext();
+  //auto &Context = CGF.CGM.getContext();
   // Allow atomicrmw only if 'x' and 'update' are integer values, lvalue for 'x'
   // expression is simple and atomic is allowed for the given type for the
   // target platform.
+
+  // since the OpenMP requires user to guarantee the alignment, the
+  // compiler check for alignment is removed.
+  // The alignment check is OK for c frontend, but may fail for Fortran
+  // this change should not be merged into the trunk
   if (BO == BO_Comma || !Update.isScalar() ||
       !Update.getScalarVal()->getType()->isIntegerTy() ||
       !X.isSimple() || (!isa<llvm::ConstantInt>(Update.getScalarVal()) &&
                         (Update.getScalarVal()->getType() !=
                          X.getAddress().getElementType())) ||
-      !X.getAddress().getElementType()->isIntegerTy() ||
+      !X.getAddress().getElementType()->isIntegerTy() /*||
       !Context.getTargetInfo().hasBuiltinAtomic(
-          Context.getTypeSize(X.getType()), Context.toBits(X.getAlignment())))
+          Context.getTypeSize(X.getType()), Context.toBits(X.getAlignment()))*/)
     return std::make_pair(false, RValue::get(nullptr));
 
   llvm::AtomicRMWInst::BinOp RMWOp;
@@ -3865,6 +4042,8 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_from:
   case OMPC_use_device_ptr:
   case OMPC_is_device_ptr:
+  case OMPC_task_reduction:
+  case OMPC_in_reduction:
     llvm_unreachable("Clause is not allowed in 'omp atomic'.");
   }
 }
@@ -3912,6 +4091,16 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
   assert(isOpenMPTargetExecutionDirective(S.getDirectiveKind()));
   CodeGenModule &CGM = CGF.CGM;
   const CapturedStmt &CS = *cast<CapturedStmt>(S.getAssociatedStmt());
+
+  // On device emit this construct as inlined code.
+  if (CGM.getLangOpts().OpenMPIsDevice) {
+    OMPLexicalScope Scope(CGF, S);
+    CGM.getOpenMPRuntime().emitInlinedDirective(
+        CGF, OMPD_target, [&CS](CodeGenFunction &CGF, PrePostActionTy &) {
+          CGF.EmitStmt(CS.getCapturedStmt());
+        });
+    return;
+  }
 
   llvm::Function *Fn = nullptr;
   llvm::Constant *FnID = nullptr;

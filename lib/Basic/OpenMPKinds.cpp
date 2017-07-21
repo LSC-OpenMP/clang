@@ -84,11 +84,6 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
 #define OPENMP_DEFAULT_KIND(Name) .Case(#Name, OMPC_DEFAULT_##Name)
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_DEFAULT_unknown);
-  case OMPC_use:
-    return llvm::StringSwitch<OpenMPUseClauseKind>(Str)
-#define OPENMP_USE_KIND(Name) .Case(#Name, OMPC_USE_##Name)
-#include "clang/Basic/OpenMPKinds.def"
-        .Default(OMPC_USE_unknown);
   case OMPC_proc_bind:
     return llvm::StringSwitch<OpenMPProcBindClauseKind>(Str)
 #define OPENMP_PROC_BIND_KIND(Name) .Case(#Name, OMPC_PROC_BIND_##Name)
@@ -130,7 +125,11 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   .Case(#Name, static_cast<unsigned>(OMPC_DEFAULTMAP_MODIFIER_##Name))
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_DEFAULTMAP_unknown);
-  case OMPC_module:
+  case OMPC_lastprivate:
+    return llvm::StringSwitch<OpenMPLastprivateClauseKind>(Str)
+#define OPENMP_LASTPRIVATE_MODIFIER(Name) .Case(#Name, OMPC_LASTPRIVATE_##Name)
+#include "clang/Basic/OpenMPKinds.def"
+        .Default(OMPC_LASTPRIVATE_unknown);
   case OMPC_unknown:
   case OMPC_threadprivate:
   case OMPC_if:
@@ -141,7 +140,6 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_collapse:
   case OMPC_private:
   case OMPC_firstprivate:
-  case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
   case OMPC_aligned:
@@ -149,7 +147,6 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
-  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_flush:
@@ -173,6 +170,8 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_from:
   case OMPC_use_device_ptr:
   case OMPC_is_device_ptr:
+  case OMPC_task_reduction:
+  case OMPC_in_reduction:
     break;
   }
   llvm_unreachable("Invalid OpenMP simple clause kind");
@@ -191,16 +190,6 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'default' clause type");
-  case OMPC_use:
-    switch (Type) {
-    case OMPC_USE_unknown:
-      return "unknown";
-#define OPENMP_USE_KIND(Name)                                              \
-  case OMPC_USE_##Name:                                                    \
-    return #Name;
-#include "clang/Basic/OpenMPKinds.def"
-    }
-    llvm_unreachable("Invalid OpenMP 'use' clause type");
   case OMPC_proc_bind:
     switch (Type) {
     case OMPC_PROC_BIND_unknown:
@@ -281,7 +270,18 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'schedule' clause type");
-  case OMPC_module:
+  case OMPC_lastprivate:
+    switch (Type) {
+    case OMPC_LASTPRIVATE_unknown:
+      return "unknown";
+#define OPENMP_LASTPRIVATE_MODIFIER(Name)                                    \
+  case OMPC_LASTPRIVATE_##Name:                                              \
+    return #Name;
+#include "clang/Basic/OpenMPKinds.def"
+    default:
+      break;
+    }
+    llvm_unreachable("Invalid OpenMP 'lastprivate' clause type");
   case OMPC_unknown:
   case OMPC_threadprivate:
   case OMPC_if:
@@ -292,7 +292,6 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_collapse:
   case OMPC_private:
   case OMPC_firstprivate:
-  case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
   case OMPC_aligned:
@@ -300,7 +299,6 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_copyprivate:
   case OMPC_ordered:
   case OMPC_nowait:
-  case OMPC_check:
   case OMPC_untied:
   case OMPC_mergeable:
   case OMPC_flush:
@@ -324,6 +322,8 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_from:
   case OMPC_use_device_ptr:
   case OMPC_is_device_ptr:
+  case OMPC_task_reduction:
+  case OMPC_in_reduction:
     break;
   }
   llvm_unreachable("Invalid OpenMP simple clause kind");
@@ -729,6 +729,26 @@ bool clang::isAllowedClauseForDirective(OpenMPDirectiveKind DKind,
       break;
     }
     break;
+  case OMPD_taskwait:
+    switch (CKind) {
+#define OPENMP_TASKWAIT_CLAUSE(Name)                                           \
+    case OMPC_##Name:                                                          \
+      return true;
+#include "clang/Basic/OpenMPKinds.def"
+    default:
+      break;
+    }
+    break;
+  case OMPD_taskgroup:
+    switch (CKind) {
+#define OPENMP_TASKGROUP_CLAUSE(Name)                                          \
+  case OMPC_##Name:                                                            \
+    return true;
+#include "clang/Basic/OpenMPKinds.def"
+    default:
+      break;
+    }
+    break;
   case OMPD_declare_target:
   case OMPD_end_declare_target:
   case OMPD_unknown:
@@ -737,8 +757,6 @@ bool clang::isAllowedClauseForDirective(OpenMPDirectiveKind DKind,
   case OMPD_master:
   case OMPD_taskyield:
   case OMPD_barrier:
-  case OMPD_taskwait:
-  case OMPD_taskgroup:
   case OMPD_cancellation_point:
   case OMPD_declare_reduction:
     break;
@@ -861,7 +879,8 @@ bool clang::isOpenMPDistributeDirective(OpenMPDirectiveKind Kind) {
 bool clang::isOpenMPPrivate(OpenMPClauseKind Kind) {
   return Kind == OMPC_private || Kind == OMPC_firstprivate ||
          Kind == OMPC_lastprivate || Kind == OMPC_linear ||
-         Kind == OMPC_reduction; // TODO add next clauses like 'reduction'.
+         Kind == OMPC_reduction || Kind == OMPC_task_reduction ||
+         Kind == OMPC_in_reduction; // TODO add next clauses like 'reduction'.
 }
 
 bool clang::isOpenMPThreadPrivate(OpenMPClauseKind Kind) {

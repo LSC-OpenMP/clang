@@ -355,20 +355,20 @@ static void AddOpenMPLinkerScript(const ToolChain &TC, Compilation &C,
 
   LksStream << "SECTIONS\n";
   LksStream << "{\n";
-  LksStream << "  .omp_offloading :\n";
-  LksStream << "  ALIGN(0x10)\n";
-  LksStream << "  {\n";
 
-  for (auto &BI : InputBinaryInfo) {
-    LksStream << "    . = ALIGN(0x10);\n";
+  // Put each target binary into a separate section.
+  for (const auto &BI : InputBinaryInfo) {
+    LksStream << "  .omp_offloading." << BI.first << " :\n";
+    LksStream << "  ALIGN(0x10)\n";
+    LksStream << "  {\n";
     LksStream << "    PROVIDE_HIDDEN(.omp_offloading.img_start." << BI.first
               << " = .);\n";
     LksStream << "    " << BI.second << "\n";
     LksStream << "    PROVIDE_HIDDEN(.omp_offloading.img_end." << BI.first
               << " = .);\n";
+    LksStream << "  }\n";
   }
 
-  LksStream << "  }\n";
   // Add commands to define host entries begin and end. We use 1-byte subalign
   // so that the linker does not add any padding and the elements in this
   // section form an array.
@@ -4953,9 +4953,13 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (DebugInfoKind == codegenoptions::LimitedDebugInfo && NeedFullDebug)
     DebugInfoKind = codegenoptions::FullDebugInfo;
 
-  if (!(IsOpenMPDevice && getToolChain().getTriple().isNVPTX()))
+  if (!(IsOpenMPDevice && getToolChain().getTriple().isNVPTX()) ||
+      (IsOpenMPDevice &&
+       Args.hasFlag(options::OPT_fopenmp_debug, options::OPT_fno_openmp_debug,
+                    /*Default=*/false))) {
     RenderDebugEnablingArgs(Args, CmdArgs, DebugInfoKind, DwarfVersion,
-                          DebuggerTuning);
+                            DebuggerTuning);
+  }
 
   // -ggnu-pubnames turns on gnu style pubnames in the backend.
   if (Args.hasArg(options::OPT_ggnu_pubnames)) {

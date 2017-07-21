@@ -1063,7 +1063,7 @@ static bool directiveRequiresOMPRuntime(const OMPExecutableDirective &D,
     return !IsInParallelRegion;
   } else if (Kind == OMPD_teams || Kind == OMPD_distribute ||
              Kind == OMPD_teams_distribute ||
-             Kind == OMPD_teams_distribute_simd) {
+             Kind == OMPD_teams_distribute_simd || Kind == OMPD_atomic) {
     return false;
   } else {
     return true;
@@ -1091,6 +1091,12 @@ void CGOpenMPRuntimeNVPTX::TargetKernelProperties::setRequiresOMPRuntime() {
     if (!RequiresOMPRuntime) {
       auto &&CondGen = [](const OMPExecutableDirective &D, bool, bool &,
                           MatchReasonTy &MatchReason) -> bool {
+        OpenMPDirectiveKind Kind = D.getDirectiveKind();
+        // Pretty much all directives nested in an SPMD directive require
+        // the OpenMP runtime to process.  The only exception is the atomic
+        // directive.
+        if (Kind == OMPD_atomic)
+          return false;
         MatchReason = MatchReasonTy(DirectiveRequiresRuntime, D.getLocStart());
         return true;
       };
@@ -1303,17 +1309,18 @@ void CGOpenMPRuntimeNVPTX::TargetKernelProperties::setMasterSharedDataSize() {
     const RecordDecl *RD = CS->getCapturedRecordDecl();
     auto CurField = RD->field_begin();
     auto CurCap = CS->capture_begin();
+
     for (CapturedStmt::const_capture_init_iterator I = CS->capture_init_begin(),
                                                    E = CS->capture_init_end();
          I != E; ++I, ++CurField, ++CurCap) {
       // Track the data sharing type.
       bool DSRef = false;
-      QualType ElemTy = (*I)->getType();
+      QualType ElemTy;
+      if (*I)
+        ElemTy = (*I)->getType();
       const VarDecl *CurVD = nullptr;
 
       if (CurField->hasCapturedVLAType()) {
-        llvm_unreachable(
-            "VLAs are not yet supported in NVPTX target data sharing!");
         continue;
       } else if (CurCap->capturesThis()) {
         // We use null to indicate 'this'.
@@ -1388,6 +1395,30 @@ void CGOpenMPRuntimeNVPTX::TargetKernelProperties::setMasterSharedDataSize() {
       }
     }
   }
+}
+
+static const OMPExecutableDirective *
+getTeamsDirective(const CodeGenModule &CGM, const OMPExecutableDirective &D) {
+  switch (D.getDirectiveKind()) {
+  case OMPD_target:
+  case OMPD_target_simd: {
+    const CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
+    if (auto *NestedDir = dyn_cast_or_null<OMPExecutableDirective>(
+            ignoreCompoundStmts(CS.getCapturedStmt())))
+      return NestedDir;
+    else
+      return &D;
+  }
+  default:
+    return &D;
+  }
+
+  return nullptr;
+}
+
+void CGOpenMPRuntimeNVPTX::TargetKernelProperties::setHasTeamsReduction() {
+  const OMPExecutableDirective &TD = *getTeamsDirective(CGM, D);
+  HasTeamsReduction = TD.hasClausesOfKind<OMPReductionClause>();
 }
 
 void CGOpenMPRuntimeNVPTX::WorkerFunctionState::createWorkerFunction(
@@ -1636,6 +1667,18 @@ static void SetPropertyExecutionMode(CodeGenModule &CGM, StringRef Name,
       CGM.getModule(), CGM.Int8Ty, /*isConstant=*/true,
       llvm::GlobalValue::WeakAnyLinkage,
       llvm::ConstantInt::get(CGM.Int8Ty, Mode), Name + Twine("_exec_mode"));
+}
+
+// Create a unique global variable to indicate whether the target teams region
+// has
+// a reduction operation.
+static void SetPropertyReduction(CodeGenModule &CGM, StringRef Name,
+                                 bool HasReduction) {
+  (void)new llvm::GlobalVariable(
+      CGM.getModule(), CGM.Int8Ty, /*isConstant=*/true,
+      llvm::GlobalValue::WeakAnyLinkage,
+      llvm::ConstantInt::get(CGM.Int8Ty, HasReduction),
+      Name + Twine("_reduction"));
 }
 
 void CGOpenMPRuntimeNVPTX::emitSPMDEntryHeader(
@@ -2371,6 +2414,7 @@ void CGOpenMPRuntimeNVPTX::emitTargetOutlinedFunction(
   }
 
   SetPropertyExecutionMode(CGM, OutlinedFn->getName(), Mode);
+  SetPropertyReduction(CGM, OutlinedFn->getName(), TP.hasTeamsReduction());
 
   CGM.getContext().getDiagnostics().Report(
       D.getLocStart(),
@@ -2909,14 +2953,14 @@ void CGOpenMPRuntimeNVPTX::createDataSharingInfo(CodeGenFunction &CGF) {
          I != E; ++I, ++CurField, ++CurCap) {
 
       const VarDecl *CurVD = nullptr;
-      QualType ElemTy = (*I)->getType();
+      QualType ElemTy;
+      if (*I)
+        ElemTy = (*I)->getType();
 
       // Track the data sharing type.
       DataSharingInfo::DataSharingType DST = DataSharingInfo::DST_Val;
 
       if (CurField->hasCapturedVLAType()) {
-        llvm_unreachable(
-            "VLAs are not yet supported in NVPTX target data sharing!");
         continue;
       } else if (CurCap->capturesThis()) {
         // We use null to indicate 'this'.
@@ -3086,24 +3130,33 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
       Ctx.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/false);
   ArgImplDecls.push_back(ImplicitParamDecl(
       Ctx, /*DC=*/nullptr, SourceLocation(),
-      &Ctx.Idents.get("data_share_saved_slot"), Ctx.getPointerType(SlotPtrTy)));
-  ArgImplDecls.push_back(
-      ImplicitParamDecl(Ctx, /*DC=*/nullptr, SourceLocation(),
-                        &Ctx.Idents.get("data_share_saved_stack"),
-                        Ctx.getPointerType(Ctx.VoidPtrTy)));
-  ArgImplDecls.push_back(
-      ImplicitParamDecl(Ctx, /*DC=*/nullptr, SourceLocation(),
-                        &Ctx.Idents.get("data_share_saved_frame"),
-                        Ctx.getPointerType(Ctx.VoidPtrTy)));
-  ArgImplDecls.push_back(
-      ImplicitParamDecl(Ctx, /*DC=*/nullptr, SourceLocation(),
-                        &Ctx.Idents.get("data_share_active_threads"),
-                        Ctx.getPointerType(Int32QTy)));
+      &Ctx.Idents.get("data_share_saved_slot"), Ctx.getPointerType(SlotPtrTy),
+      ImplicitParamDecl::Other));
+  ArgImplDecls.push_back(ImplicitParamDecl(
+      Ctx, /*DC=*/nullptr, SourceLocation(),
+      &Ctx.Idents.get("data_share_saved_stack"),
+      Ctx.getPointerType(Ctx.VoidPtrTy), ImplicitParamDecl::Other));
+  ArgImplDecls.push_back(ImplicitParamDecl(
+      Ctx, /*DC=*/nullptr, SourceLocation(),
+      &Ctx.Idents.get("data_share_saved_frame"),
+      Ctx.getPointerType(Ctx.VoidPtrTy), ImplicitParamDecl::Other));
+  ArgImplDecls.push_back(ImplicitParamDecl(
+      Ctx, /*DC=*/nullptr, SourceLocation(),
+      &Ctx.Idents.get("data_share_active_threads"),
+      Ctx.getPointerType(Int32QTy), ImplicitParamDecl::Other));
 
   auto *MasterRD = DSI.MasterRecordType->getAs<RecordType>()->getDecl();
   auto CapturesIt = DSI.CapturesValues.begin();
   for (auto *F : MasterRD->fields()) {
     QualType ArgTy = F->getType();
+
+    if (ArgTy->isVariablyModifiedType()) {
+      bool IsReference = ArgTy->isLValueReferenceType();
+      ArgTy = Ctx.getCanonicalParamType(ArgTy.getNonReferenceType());
+      if (IsReference && !ArgTy->isPointerType()) {
+        ArgTy = Ctx.getLValueReferenceType(ArgTy, /*SpelledAsLValue=*/false);
+      }
+    }
 
     // If this is not a reference the right address type is the pointer type of
     // the type that is the record.
@@ -3120,7 +3173,7 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
       Name += ".addr";
       auto &NameID = Ctx.Idents.get(Name);
       ImplicitParamDecl D(Ctx, /*DC=*/nullptr, SourceLocation(), &NameID,
-                          Ctx.getPointerType(ArgTy));
+                          Ctx.getPointerType(ArgTy), ImplicitParamDecl::Other);
       ArgImplDecls.push_back(D);
     }
 
@@ -3128,15 +3181,18 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
     NameOrig += ".orig";
     auto &NameOrigID = Ctx.Idents.get(NameOrig);
     ImplicitParamDecl OrigD(Ctx, /*DC=*/nullptr, SourceLocation(), &NameOrigID,
-                            ArgTy);
+                            ArgTy, ImplicitParamDecl::Other);
     ArgImplDecls.push_back(OrigD);
 
     ++CapturesIt;
   }
 
   FunctionArgList ArgList;
-  for (auto &I : ArgImplDecls)
+  int count = 0;
+  for (auto &I : ArgImplDecls) {
     ArgList.push_back(&I);
+    count++;
+  }
 
   auto &CGFI =
       CGM.getTypes().arrangeBuiltinFunctionDeclaration(Ctx.VoidTy, ArgList);
@@ -3426,14 +3482,11 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
   QualType Int32QTy =
       Ctx.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/false);
   QualType Int32PtrQTy = Ctx.getPointerType(Int32QTy);
-  ImplicitParamDecl ParallelLevelArg(Ctx, /*DC=*/nullptr, SourceLocation(),
-                                     /*Id=*/nullptr, Int16QTy);
-  ImplicitParamDecl WrapperArg(Ctx, /*DC=*/nullptr, SourceLocation(),
-                               /*Id=*/nullptr, Int32QTy);
-  ImplicitParamDecl WrapperLaneArg(Ctx, /*DC=*/nullptr, SourceLocation(),
-                                   /*Id=*/nullptr, Int32PtrQTy);
-  ImplicitParamDecl WrapperNumLanesArg(Ctx, /*DC=*/nullptr, SourceLocation(),
-                                       /*Id=*/nullptr, Int32PtrQTy);
+  ImplicitParamDecl ParallelLevelArg(Ctx, Int16QTy, ImplicitParamDecl::Other);
+  ImplicitParamDecl WrapperArg(Ctx, Int32QTy, ImplicitParamDecl::Other);
+  ImplicitParamDecl WrapperLaneArg(Ctx, Int32PtrQTy, ImplicitParamDecl::Other);
+  ImplicitParamDecl WrapperNumLanesArg(Ctx, Int32PtrQTy,
+                                       ImplicitParamDecl::Other);
   WrapperArgs.push_back(&ParallelLevelArg);
   WrapperArgs.push_back(&WrapperArg);
   if (IsSimd) {
@@ -3466,20 +3519,25 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
   // Create temporary variables to contain the new args.
   SmallVector<Address, 32> ArgsAddresses;
 
+  int NameIdx = 0;
   auto *RD = CS.getCapturedRecordDecl();
   auto CurField = RD->field_begin();
   for (CapturedStmt::const_capture_iterator CI = CS.capture_begin(),
                                             CE = CS.capture_end();
        CI != CE; ++CI, ++CurField) {
-    assert(!CI->capturesVariableArrayType() && "Not expecting to capture VLA!");
+    QualType ElemTy = CurField->getType();
+
+    if (CI->capturesVariableArrayType()){
+      ArgsAddresses.push_back(CGF.CreateMemTemp(ElemTy, "vla.addr." + std::to_string(NameIdx)));
+      NameIdx++;
+      continue;
+    }
 
     StringRef Name;
     if (CI->capturesThis())
       Name = "this";
     else
       Name = CI->getCapturedVar()->getName();
-
-    QualType ElemTy = CurField->getType();
 
     // If this is a capture by copy the element type has to be the pointer to
     // the data.
@@ -3525,10 +3583,17 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
         DSI.MasterRecordType->getAs<RecordType>()->getDecl()->field_begin();
     for (CapturedStmt::const_capture_iterator CI = CS.capture_begin(),
                                               CE = CS.capture_end();
-         CI != CE; ++CI, ++ArgsIdx, ++FI) {
+         CI != CE; ++CI) {
+      if (CI->capturesVariableArrayType()){
+        // Create Value store
+        ++ArgsIdx;
+        continue;
+      }
       const VarDecl *VD = CI->capturesThis() ? nullptr : CI->getCapturedVar();
       CreateAddressStoreForVariable(CGF, VD, FI->getType(), DSI, CastedDataAddr,
                                     ArgsAddresses[ArgsIdx]);
+      ++FI;
+      ++ArgsIdx;
     }
 
     // Get the addresses of the loop bounds if required.
@@ -3564,10 +3629,15 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
         DSI.MasterRecordType->getAs<RecordType>()->getDecl()->field_begin();
     for (CapturedStmt::const_capture_iterator CI = CS.capture_begin(),
                                               CE = CS.capture_end();
-         CI != CE; ++CI, ++ArgsIdx, ++FI) {
+         CI != CE; ++CI, ++ArgsIdx) {
+      if (CI->capturesVariableArrayType()){
+        // Create Value store
+        continue;
+      }
       const VarDecl *VD = CI->capturesThis() ? nullptr : CI->getCapturedVar();
       CreateAddressStoreForVariable(CGF, VD, FI->getType(), DSI, CastedDataAddr,
                                     ArgsAddresses[ArgsIdx], SourceLaneID);
+      FI++;
     }
 
     // Get the addresses of the loop bounds if required.
@@ -3636,11 +3706,20 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
   auto CapInfo = DSI.CapturesValues.begin();
   auto FI = DSI.MasterRecordType->getAs<RecordType>()->getDecl()->field_begin();
   auto CI = CS.capture_begin();
-  for (unsigned i = 0; i < CS.capture_size(); ++i, ++FI, ++CI, ++CapInfo) {
+  auto CurrentField = RD->field_begin();
+  for (unsigned i = 0/*, ArgIdx = 0*/; i < CS.capture_size(); ++i, ++CI, ++CapInfo, ++CurrentField) {
+    if (CI->capturesVariableArrayType()) {
+      auto CapturedTy = CurrentField->getType();
+      auto *Arg = CGF.EmitLoadOfScalar(ArgsAddresses[i], /*Volatile=*/false,
+                                       Ctx.getPointerType(CapturedTy),
+                                       SourceLocation());
+      Args.push_back(Arg);
+      continue;
+    }
+
     auto *Arg = CGF.EmitLoadOfScalar(ArgsAddresses[i], /*Volatile=*/false,
                                      Ctx.getPointerType(FI->getType()),
                                      SourceLocation());
-
     // If this is a capture by value, we need to load the data. Additionally, if
     // its not a pointer we may need to cast it to uintptr.
     if (CI->capturesVariableByCopy()) {
@@ -3662,6 +3741,8 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
     }
 
     Args.push_back(Arg);
+
+    ++FI;
   }
 
   CGF.EmitCallOrInvoke(&OutlinedParallelFn, Args);
@@ -4430,6 +4511,16 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
 
     llvm::BasicBlock &HeaderBB = Fn->front();
 
+    llvm::Instruction *SharedDataInfrastructureInsertPoint = nullptr;
+    bool hasOMPInitDSBlock = false;
+    for (auto &BB : Fn->getBasicBlockList()) {
+      if (BB.getName() == "omp.init.ds") {
+        SharedDataInfrastructureInsertPoint = &(*BB.begin());
+        hasOMPInitDSBlock = true;
+        break;
+      }
+    }
+
     // Find the last alloca and the last replacement that is not an alloca.
     llvm::Instruction *LastAlloca = nullptr;
     llvm::Instruction *LastNonAllocaReplacement = nullptr;
@@ -4452,6 +4543,10 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
       if (!It->second)
         LastNonAllocaNonRefReplacement = LastNonAllocaReplacement;
     }
+
+    llvm::Instruction *DSInsertPtr = nullptr;
+    if (SharedDataInfrastructureInsertPoint)
+      DSInsertPtr = SharedDataInfrastructureInsertPoint;
 
     // We will start inserting after the first alloca or at the beginning of the
     // function.
@@ -4491,7 +4586,10 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
     // If there is nothing to share, and this is an entry point, we should
     // initialize the data sharing logic anyways.
     if (!DSI.InitializationFunction && DSI.IsEntryPoint) {
-      InitializeEntryPoint(InsertPtr);
+      if (DSInsertPtr)
+        InitializeEntryPoint(DSInsertPtr);
+      else
+        InitializeEntryPoint(InsertPtr);
       continue;
     }
 
@@ -4540,36 +4638,50 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
     if (LastNonAllocaReplacement)
       InsertPtr = LastNonAllocaReplacement->getNextNode();
 
+    if (DSInsertPtr)
+      InsertPtr = DSInsertPtr;
+
     // Do the replacements now.
     for (auto &R : Replacements) {
       auto *From = R.first;
       auto *To = new llvm::LoadInst(R.second, "", /*isVolatile=*/false,
                                     PointerAlign, InsertPtr);
+      llvm::Instruction *ToInstr = To;
 
       // Check if there are uses of From before To and move them after To. These
       // are usually the function epilogue stores.
-      for (auto II = HeaderBB.begin(), IE = HeaderBB.end(); II != IE;) {
-        llvm::Instruction *I = &*II;
-        ++II;
+      for (auto &StartBlock : Fn->getBasicBlockList()) {
+        // Only visit the header and omp.init.ds (if it exists) blocks.
+        for (auto II = StartBlock.begin(), IE = StartBlock.end(); II != IE;) {
+          llvm::Instruction *I = &*II;
+          ++II;
 
-        if (I == To)
-          break;
-        if (I == From)
-          continue;
-
-        bool NeedsToMove = false;
-        for (auto *U : From->users()) {
-          // Is this a user of from? If so we need to move it.
-          if (I == U) {
-            NeedsToMove = true;
+          if (I == To)
             break;
+          if (I == From)
+            continue;
+
+          bool NeedsToMove = false;
+          for (auto *U : From->users()) {
+            // Is this a user of from? If so we need to move it.
+            if (I == U) {
+              NeedsToMove = true;
+              break;
+            }
           }
+
+          if (!NeedsToMove)
+            continue;
+
+          I->moveBefore(ToInstr->getNextNode());
+          ToInstr = ToInstr->getNextNode();
         }
-
-        if (!NeedsToMove)
-          continue;
-
-        I->moveBefore(To->getNextNode());
+        // Only visit the header and omp.init.ds (if it exists) blocks.
+        if (hasOMPInitDSBlock) {
+          if (StartBlock.getName() == "omp.init.ds")
+            break;
+        } else
+            break;
       }
 
       From->replaceAllUsesWith(To);
@@ -4578,13 +4690,76 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
       InsertPtr = To;
     }
 
-    // Move the initialization insert point if it is before the the current
-    // initialization insert point.
-    for (auto *I = InsertPtr; I; I = I->getNextNode())
-      if (I == InitializationInsertPtr) {
-        InitializationInsertPtr = InsertPtr;
-        break;
+    if (hasOMPInitDSBlock) {
+      bool InstructionWasMoved = true;
+      while(InstructionWasMoved){
+        InstructionWasMoved = false;
+        for (auto &StartBlock : Fn->getBasicBlockList()) {
+          for (auto II = StartBlock.begin(), IE = StartBlock.end(); II != IE;) {
+            llvm::Instruction *OuterInstr = &*II;
+            ++II;
+
+            if (dyn_cast<llvm::AllocaInst>(OuterInstr))
+              continue;
+
+            if (dyn_cast<llvm::StoreInst>(OuterInstr))
+              continue;
+
+            // Instruction I is the current instruction
+            // Scan the two blocks and check if a usage of II is found
+            // before it is initialized.
+            for (auto *Usage : OuterInstr->users()) {
+              // Let's check to see if the usage is BEFORE the init.
+              bool InitFound = false;
+              for (auto &StartBlock : Fn->getBasicBlockList()) {
+                for (auto JJ = StartBlock.begin(), IE = StartBlock.end(); JJ != IE;) {
+                  llvm::Instruction *InnerInstr = &*JJ;
+                  ++JJ;
+
+                  if (OuterInstr == InnerInstr)
+                    InitFound = true;
+
+                  if (Usage == InnerInstr)
+                    if (!InitFound){
+                       InnerInstr->moveBefore(OuterInstr->getNextNode());
+                       InstructionWasMoved = true;
+                    }
+
+                }
+                // Only visit the header and omp.init.ds (if it exists) blocks.
+                if (hasOMPInitDSBlock) {
+                  if (StartBlock.getName() == "omp.init.ds")
+                    break;
+                } else
+                    break;
+              }
+            }
+          }
+          // Only visit the header and omp.init.ds (if it exists) blocks.
+          if (hasOMPInitDSBlock) {
+            if (StartBlock.getName() == "omp.init.ds")
+              break;
+          } else
+              break;
+        }
       }
+    }
+
+    if (!hasOMPInitDSBlock) {
+      for (auto *I = InsertPtr; I; I = I->getNextNode())
+        if (I == InitializationInsertPtr) {
+          InitializationInsertPtr = InsertPtr;
+          break;
+        }
+    } else {
+      for (auto &BB : Fn->getBasicBlockList()) {
+        if (BB.getName() == "omp.init.ds") {
+          InitializationInsertPtr = &(*BB.begin());
+          InsertPtr = InitializationInsertPtr;
+          break;
+        }
+      }
+    }
 
     // If this is an entry point, we have to initialize the data sharing first.
     if (DSI.IsEntryPoint)
@@ -4593,16 +4768,33 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
     // Adjust address spaces in the function arguments.
     auto FArg = DSI.InitializationFunction->arg_begin();
     for (auto &Arg : InitArgs) {
-
       // If the argument is not in the header of the function (usually because
       // it is after the scheduling of an outermost loop), create a clone
       // in there and use it instead.
-      if (auto *I = dyn_cast<llvm::Instruction>(Arg))
+      if (auto *I = dyn_cast<llvm::Instruction>(Arg)) {
         if (I->getParent() != &Fn->front()) {
           auto *CI = I->clone();
           Arg = CI;
           CI->insertBefore(InsertPtr);
+
+          if (isa<llvm::LoadInst>(I)) {
+            auto LoadedValue = I->getOperand(0);
+
+            for (auto Usage : LoadedValue->users()) {
+              if (auto *ST = dyn_cast<llvm::StoreInst>(Usage)) {
+                auto *STClone = ST->clone();
+                STClone->insertBefore(CI);
+                if (auto *LD = dyn_cast<llvm::LoadInst>(STClone->getOperand(0))) {
+                  auto *LDClone = LD->clone();
+                  STClone->setOperand(0, LDClone);
+                  LDClone->insertBefore(STClone);
+                }
+                break;
+              }
+            }
+          }
         }
+      }
 
       // Types match, nothing to do.
       if (FArg->getType() == Arg->getType()) {
@@ -4800,7 +4992,10 @@ StringRef CGOpenMPRuntimeNVPTX::RenameStandardFunction(StringRef name) {
 
     // temporary solution for Znam: this is how the cuda toolkit defines
     // _Znam but the header file is not properly picked up
+    // same for new and delete
     stdFuncs.insert(std::make_pair("_Znam", "malloc"));
+    stdFuncs.insert(std::make_pair("_Znwm", "malloc"));
+    stdFuncs.insert(std::make_pair("_ZdlPv", "free"));
   }
 
   // If callee is standard function, change its name
@@ -5110,20 +5305,16 @@ llvm::Value *EmitCopyToScratchpad(CodeGenModule &CGM,
   FunctionArgList Args;
 
   // ReduceData- this is the source of the copy.
-  ImplicitParamDecl ReduceDataArg(C, /*DC=*/nullptr, SourceLocation(),
-                                  /*Id=*/nullptr, C.VoidPtrTy);
+  ImplicitParamDecl ReduceDataArg(C, C.VoidPtrTy, ImplicitParamDecl::Other);
   // This is the pointer to the scratchpad array, with each element
   // storing ReduceData.
-  ImplicitParamDecl ScratchPadArg(C, /*DC=*/nullptr, SourceLocation(),
-                                  /*Id=*/nullptr, C.VoidPtrTy);
+  ImplicitParamDecl ScratchPadArg(C, C.VoidPtrTy, ImplicitParamDecl::Other);
   // This argument specifies the index into the scratchpad array,
   // typically the TeamId.
-  ImplicitParamDecl IndexArg(C, /*DC=*/nullptr, SourceLocation(),
-                             /*Id=*/nullptr, C.IntTy);
+  ImplicitParamDecl IndexArg(C, C.IntTy, ImplicitParamDecl::Other);
   // This argument specifies the row width of an element, typically
   // the number of teams.
-  ImplicitParamDecl WidthArg(C, /*DC=*/nullptr, SourceLocation(),
-                             /*Id=*/nullptr, C.IntTy);
+  ImplicitParamDecl WidthArg(C, C.IntTy, ImplicitParamDecl::Other);
   Args.push_back(&ReduceDataArg);
   Args.push_back(&ScratchPadArg);
   Args.push_back(&IndexArg);
@@ -5201,22 +5392,17 @@ llvm::Value *EmitReduceScratchpadFunction(CodeGenModule &CGM,
   FunctionArgList Args;
 
   // This is the pointer that points to ReduceData.
-  ImplicitParamDecl ReduceDataArg(C, /*DC=*/nullptr, SourceLocation(),
-                                  /*Id=*/nullptr, C.VoidPtrTy);
+  ImplicitParamDecl ReduceDataArg(C, C.VoidPtrTy, ImplicitParamDecl::Other);
   // Pointer to the scratchpad.
-  ImplicitParamDecl ScratchPadArg(C, /*DC=*/nullptr, SourceLocation(),
-                                  /*Id=*/nullptr, C.VoidPtrTy);
+  ImplicitParamDecl ScratchPadArg(C, C.VoidPtrTy, ImplicitParamDecl::Other);
   // This argument specifies the index of the ReduceData in the
   // scratchpad.
-  ImplicitParamDecl IndexArg(C, /*DC=*/nullptr, SourceLocation(),
-                             /*Id=*/nullptr, C.IntTy);
+  ImplicitParamDecl IndexArg(C, C.IntTy, ImplicitParamDecl::Other);
   // This argument specifies the row width of an element.
-  ImplicitParamDecl WidthArg(C, /*DC=*/nullptr, SourceLocation(),
-                             /*Id=*/nullptr, C.IntTy);
+  ImplicitParamDecl WidthArg(C, C.IntTy, ImplicitParamDecl::Other);
   // If should_reduce == 1, then it's load AND reduce,
   // If should_reduce == 0 (or otherwise), then it only loads (+ copy).
-  ImplicitParamDecl ShouldReduceArg(C, /*DC=*/nullptr, SourceLocation(),
-                                    /*Id=*/nullptr, C.IntTy);
+  ImplicitParamDecl ShouldReduceArg(C, C.IntTy, ImplicitParamDecl::Other);
 
   Args.push_back(&ReduceDataArg);
   Args.push_back(&ScratchPadArg);
@@ -5338,13 +5524,11 @@ static llvm::Value *EmitInterWarpCopyFunction(CodeGenModule &CGM,
   // ReduceData: thread local reduce_data.
   // At the stage of the computation when this function is called,
   // useful values reside in the first lane of every warp.
-  ImplicitParamDecl ReduceDataArg(C, /*DC=*/nullptr, SourceLocation(),
-                                  /*Id=*/nullptr, C.VoidPtrTy);
+  ImplicitParamDecl ReduceDataArg(C, C.VoidPtrTy, ImplicitParamDecl::Other);
   // WarpNum: number of warps needed to compute the entire block
   // of elements. This could be smaller than 32 for partial
   // block reduction.
-  ImplicitParamDecl WarpNumArg(C, /*DC=*/nullptr, SourceLocation(),
-                               /*Id=*/nullptr, C.IntTy);
+  ImplicitParamDecl WarpNumArg(C, C.IntTy, ImplicitParamDecl::Other);
   FunctionArgList Args;
   Args.push_back(&ReduceDataArg);
   Args.push_back(&WarpNumArg);
@@ -5576,16 +5760,12 @@ EmitShuffleAndReduceFunction(CodeGenModule &CGM,
 
   // Thread local reduce_data used to host the values of data
   // to be reduced.
-  ImplicitParamDecl ReduceDataArg(C, /*DC=*/nullptr, SourceLocation(),
-                                  /*Id=*/nullptr, C.VoidPtrTy);
+  ImplicitParamDecl ReduceDataArg(C, C.VoidPtrTy, ImplicitParamDecl::Other);
   // Current lane id, could be logical.
-  ImplicitParamDecl LaneIDArg(C, /*DC=*/nullptr, SourceLocation(),
-                              /*Id=*/nullptr, C.ShortTy);
+  ImplicitParamDecl LaneIDArg(C, C.ShortTy, ImplicitParamDecl::Other);
   // Offset of the remote source lane relative to the current lane.
-  ImplicitParamDecl OffsetArg(C, /*DC=*/nullptr, SourceLocation(),
-                              /*Id=*/nullptr, C.ShortTy);
-  ImplicitParamDecl AlgoVerArg(C, /*DC=*/nullptr, SourceLocation(),
-                               /*Id=*/nullptr, C.ShortTy);
+  ImplicitParamDecl OffsetArg(C, C.ShortTy, ImplicitParamDecl::Other);
+  ImplicitParamDecl AlgoVerArg(C, C.ShortTy, ImplicitParamDecl::Other);
 
   FunctionArgList Args;
   Args.push_back(&ReduceDataArg);
@@ -5732,6 +5912,13 @@ void CGOpenMPRuntimeNVPTX::emitReduction(
     OpenMPDirectiveKind ReductionKind) {
   if (!CGF.HaveInsertPoint())
     return;
+
+  if (SimpleReduction) {
+    CGOpenMPRuntime::emitReduction(CGF, Loc, Privates, LHSExprs, RHSExprs,
+                                   ReductionOps, WithNowait, SimpleReduction,
+                                   ReductionKind);
+    return;
+  }
 
   bool TeamsReduction = isOpenMPTeamsDirective(ReductionKind);
   bool ParallelReduction = isOpenMPParallelDirective(ReductionKind);

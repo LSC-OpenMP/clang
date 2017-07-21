@@ -23,5 +23,7 @@ test:
   pre:
     - cp -R $CLANG_SRC $LLVM_SRC/tools/
   override:
-    - cmake $LLVM_SRC
+    - cmake $LLVM_SRC -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_BUILD_TYPE=Release
     - make
+  post:
+    - make check-all
