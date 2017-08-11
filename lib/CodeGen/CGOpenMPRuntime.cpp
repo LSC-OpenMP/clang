@@ -3359,11 +3359,8 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   } else if (Triple == "harp") {
     sub_target_id = 9002;
   } else {
-    sub_target_id = 0;
+    return;
   }
-
-  llvm::errs() << "sub_target_id: " << sub_target_id << "\n";
-  llvm::errs() << "triple       : " << Triple << "\n";
 
   ConstantInitBuilder EntryBuilder(CGM);
   auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
@@ -8086,6 +8083,7 @@ void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
         llvm::errs() << "module clause not specified" << "\n";
       }
 
+      // TODO(ciroceissler): add this funcionality in the future
       // if (c_check) {
       //   llvm::errs() << "check!\n";
       // }

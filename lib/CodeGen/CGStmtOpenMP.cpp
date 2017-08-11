@@ -1456,6 +1456,8 @@ static void emitCommonOMPParallelDirective(CodeGenFunction &CGF,
                                            OpenMPDirectiveKind InnermostKind,
                                            const RegionCodeGenTy &CodeGen,
                                            unsigned CaptureLevel = 1) {
+
+  CGF.CGM.getOpenMPRuntime().createFPGAInfo(S);
   CGF.CGM.getOpenMPRuntime().registerParallelContext(CGF, S);
   auto CS = cast<CapturedStmt>(S.getAssociatedStmt());
   auto OutlinedFn = CGF.CGM.getOpenMPRuntime().emitParallelOutlinedFunction(
@@ -3039,9 +3041,6 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     OMPCancelStackRAII CancelRegion(CGF, OMPD_parallel_for, S.hasCancel());
     CGF.EmitOMPWorksharingLoop(S);
   };
-
-  CGM.getOpenMPRuntime().createFPGAInfo(S);
-
   emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen);
 }
 
