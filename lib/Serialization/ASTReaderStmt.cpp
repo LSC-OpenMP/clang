@@ -1775,9 +1775,6 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_use:
     C = new (Context) OMPUseClause();
     break;
-  case OMPC_module:
-    C = new (Context) OMPModuleClause();
-    break;
   case OMPC_proc_bind:
     C = new (Context) OMPProcBindClause();
     break;
@@ -1957,11 +1954,6 @@ void OMPClauseReader::VisitOMPIfClause(OMPIfClause *C) {
   C->setNameModifierLoc(Reader->ReadSourceLocation());
   C->setColonLoc(Reader->ReadSourceLocation());
   C->setCondition(Reader->Record.readSubExpr());
-  C->setLParenLoc(Reader->ReadSourceLocation());
-}
-
-void OMPClauseReader::VisitOMPModuleClause(OMPModuleClause *C) {
-  C->setModuleNameInfo(Reader->ReadString());
   C->setLParenLoc(Reader->ReadSourceLocation());
 }
 

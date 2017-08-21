@@ -8074,19 +8074,15 @@ void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
 
   if (C) {
     if (C->getUseKind() == OMPC_USE_hrw) {
-      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
       const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
 
-      if (c_module) {
-        this->TgtFPGAModule = c_module->getModuleNameInfo();
-      } else {
-        llvm::errs() << "module clause not specified" << "\n";
-      }
+      // TODO(ciroceissler): get module name
+      this->TgtFPGAModule = "name_module";
 
       // TODO(ciroceissler): add this funcionality in the future
-      // if (c_check) {
+      if (c_check) {
       //   llvm::errs() << "check!\n";
-      // }
+      }
     }
   }
 }

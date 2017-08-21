@@ -614,12 +614,6 @@ void OMPClausePrinter::VisitOMPIfClause(OMPIfClause *Node) {
   OS << ")";
 }
 
-void OMPClausePrinter::VisitOMPModuleClause(OMPModuleClause *Node) {
-  OS << "module(";
-  OS << Node->getModuleNameInfo();
-  OS << ")";
-}
-
 void OMPClausePrinter::VisitOMPFinalClause(OMPFinalClause *Node) {
   OS << "final(";
   Node->getCondition()->printPretty(OS, nullptr, Policy, 0);

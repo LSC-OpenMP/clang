@@ -2760,11 +2760,6 @@ bool RecursiveASTVisitor<Derived>::VisitOMPUseClause(OMPUseClause *) {
 }
 
 template <typename Derived>
-bool RecursiveASTVisitor<Derived>::VisitOMPModuleClause(OMPModuleClause *) {
-  return true;
-}
-
-template <typename Derived>
 bool RecursiveASTVisitor<Derived>::VisitOMPProcBindClause(OMPProcBindClause *) {
   return true;
 }

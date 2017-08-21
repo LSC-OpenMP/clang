@@ -1990,62 +1990,6 @@ public:
   }
 };
 
-/// \brief This represents clause 'module' in the '#pragma omp ...'
-/// directives.
-///
-/// \code
-/// #pragma omp parallel use(hrw) module(multr.v)
-/// \endcode
-/// In this example directive '#pragma omp parallel' has clause 'module'
-///
-class OMPModuleClause : public OMPClause {
-  friend class OMPClauseReader;
-
-  /// \brief Location of '('.
-  SourceLocation LParenLoc;
-  /// \brief A name of custom operator.
-  std::string NameInfo;
-
-  /// \brief Set the location of '('.
-  void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
-  /// \brief Set module StringRef.
-  void setModuleNameInfo(std::string S) { NameInfo = S; }
-
-public:
-  /// \brief Build 'module' clause.
-  ///
-  /// \param StartLoc Starting location of the clause.
-  /// \param LParenLoc Location of '('.
-  /// \param EndLoc Ending location of the clause.
-  /// \param NameInfo Module custom operator.
-  ///
-  OMPModuleClause(SourceLocation StartLoc, SourceLocation LParenLoc,
-                  SourceLocation EndLoc, llvm::StringRef NameInfo)
-      : OMPClause(OMPC_module, StartLoc, EndLoc), LParenLoc(LParenLoc),
-        NameInfo(NameInfo.str()) {}
-
-  /// \brief Build an empty clause.
-  ///
-  explicit OMPModuleClause()
-      : OMPClause(OMPC_module, SourceLocation(), SourceLocation()),
-        NameInfo(nullptr) {}
-
-  /// \brief Get name info of the clause.
-  std::string getModuleNameInfo() { return NameInfo; }
-  /// \brief Get name info of the clause.
-  std::string getModuleNameInfo() const { return NameInfo; }
-  /// \brief Get location of '('.
-  SourceLocation getLParenLoc() { return LParenLoc; }
-
-  static bool classof(const OMPClause *T) {
-    return T->getClauseKind() == OMPC_module;
-  }
-
-  child_range children() {
-    return child_range(child_iterator(), child_iterator());
-  }
-};
-
 /// \brief This represents 'check' clause in the '#pragma omp ...' directive.
 ///
 /// \code
@@ -2905,15 +2849,15 @@ public:
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
   ///
-  OMPDeviceClause(Expr *E, SourceLocation StartLoc, SourceLocation LParenLoc, 
+  OMPDeviceClause(Expr *E, SourceLocation StartLoc, SourceLocation LParenLoc,
                   SourceLocation EndLoc)
-      : OMPClause(OMPC_device, StartLoc, EndLoc), LParenLoc(LParenLoc), 
+      : OMPClause(OMPC_device, StartLoc, EndLoc), LParenLoc(LParenLoc),
         Device(E) {}
 
   /// \brief Build an empty clause.
   ///
   OMPDeviceClause()
-      : OMPClause(OMPC_device, SourceLocation(), SourceLocation()), 
+      : OMPClause(OMPC_device, SourceLocation(), SourceLocation()),
         LParenLoc(SourceLocation()), Device(nullptr) {}
   /// \brief Sets the location of '('.
   void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }

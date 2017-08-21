@@ -8339,12 +8339,6 @@ TreeTransform<Derived>::TransformOMPDefaultmapClause(OMPDefaultmapClause *C) {
 }
 
 template <typename Derived>
-OMPClause *
-TreeTransform<Derived>::TransformOMPModuleClause(OMPModuleClause *C) {
-  return C;
-}
-
-template <typename Derived>
 OMPClause *TreeTransform<Derived>::TransformOMPToClause(OMPToClause *C) {
   llvm::SmallVector<Expr *, 16> Vars;
   Vars.reserve(C->varlist_size());
