@@ -7667,13 +7667,53 @@ void CGOpenMPRuntime::emitTargetCall(
   // Check the error code and execute the host version if required.
   auto OffloadFailedBlock = CGF.createBasicBlock("omp_offload.failed");
   auto OffloadContBlock = CGF.createBasicBlock("omp_offload.cont");
+  auto OffloadCheckBlock = CGF.createBasicBlock("omp_offload.check");
   auto OffloadErrorVal = CGF.EmitLoadOfScalar(OffloadError, SourceLocation());
   auto Failed = CGF.Builder.CreateIsNotNull(OffloadErrorVal);
-  CGF.Builder.CreateCondBr(Failed, OffloadFailedBlock, OffloadContBlock);
+  CGF.Builder.CreateCondBr(Failed, OffloadFailedBlock, OffloadCheckBlock);
 
   CGF.EmitBlock(OffloadFailedBlock);
   emitOutlinedFunctionCall(CGF, D.getLocStart(), OutlinedFn,
                            MapArrays.KernelArgs);
+  CGF.EmitBranch(OffloadContBlock);
+
+  CGF.EmitBlock(OffloadCheckBlock);
+
+  auto module = OffloadCheckBlock->getModule();
+  auto &context = module->getContext();
+
+  auto malloc_ty = llvm::FunctionType::get(
+                       llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0),
+                       { llvm::Type::getInt64Ty(context) },
+                       false);
+
+  auto free_ty = llvm::FunctionType::get(
+                       llvm::Type::getVoidTy(context),
+                       { llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0) },
+                       false);
+
+  auto malloc_fn = module->getOrInsertFunction("malloc", malloc_ty);
+  auto free_fn = module->getOrInsertFunction("free", free_ty);
+
+  MappableExprsHandler::MapValuesArrayTy CheckArgs;
+  SmallVector<llvm::Value*, 8> ToFreeArgs;
+
+  for (unsigned int i = 0; i < KernelArgs.size(); i++) {
+    if (0 < (MapTypes[i] & MappableExprsHandler::OMP_MAP_FROM)) {
+      llvm::Value* ptrMalloc = CGF.Builder.CreateCall(malloc_fn, {Sizes[i]});
+      CheckArgs.push_back(CGF.Builder.CreatePointerCast(ptrMalloc, KernelArgs[i]->getType()));
+      ToFreeArgs.push_back(ptrMalloc);
+    } else {
+      CheckArgs.push_back(KernelArgs[i]);
+    }
+  }
+
+  CGF.Builder.CreateCall(OutlinedFn, CheckArgs);
+
+  for (auto arg : ToFreeArgs) {
+    CGF.Builder.CreateCall(free_fn, {arg});
+  }
+
   CGF.EmitBranch(OffloadContBlock);
 
   CGF.EmitBlock(OffloadContBlock, /*IsFinished=*/true);
@@ -9732,7 +9772,7 @@ void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
 
   // check if is an FPGA device
   auto &Triple = CGM.getTarget().getTargetOpts().Triple;
-  if ((Triple != "smartnic") && (Triple != "harp") && (Triple != "harpsim") && 
+  if ((Triple != "smartnic") && (Triple != "harp") && (Triple != "harpsim") &&
       (Triple != "awsf1") ) {
     return;
   }
@@ -9751,8 +9791,7 @@ void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
       }
 
       if (c_check) {
-        // TODO(ciroceissler): add this funcionality in the future
-        llvm::errs() << "check clause is not available!\n";
+        llvm::errs() << "check!\n";
       }
     }
   }
