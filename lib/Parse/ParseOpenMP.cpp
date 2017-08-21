@@ -1175,6 +1175,8 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
 
     if (CKind == OMPC_ordered && PP.LookAhead(/*N=*/0).isNot(tok::l_paren))
       Clause = ParseOpenMPClause(CKind);
+    else if (CKind == OMPC_device)
+      Clause = ParseOpenMPDeviceClause(CKind);
     else
       Clause = ParseOpenMPSingleExprClause(CKind);
     break;
@@ -1921,5 +1923,48 @@ OMPClause *Parser::ParseOpenMPVarListClause(OpenMPDirectiveKind DKind,
       Data.ReductionIdScopeSpec, Data.ReductionId, Data.DepKind, Data.LinKind,
       Data.LastprivateKind, Data.MapTypeModifier, Data.MapType,
       Data.IsMapTypeImplicit, Data.DepLinMapLoc);
+}
+
+OMPClause *Parser::ParseOpenMPDeviceClause(OpenMPClauseKind Kind) {
+  SourceLocation Loc = ConsumeToken();
+
+  // Parse '('.
+  BalancedDelimiterTracker T(*this, tok::l_paren, tok::annot_pragma_openmp_end);
+  if (T.expectAndConsume(diag::err_expected_lparen_after,
+                         getOpenMPClauseName(Kind)))
+    return nullptr;
+
+  std::string name;
+  ExprResult Val;
+
+  SourceLocation ELoc = Tok.getLocation();
+  ExprResult LHS(ParseCastExpression(
+      /*isUnaryExpression=*/false, /*isAddressOfOperand=*/false, NotTypeCast));
+  Val = ParseRHSOfBinaryExpression(LHS, prec::Conditional);
+  Val = Actions.ActOnFinishFullExpr(Val.get(), ELoc);
+
+  if (Val.isInvalid())
+    return nullptr;
+
+  if (Tok.is(tok::colon)) {
+    ConsumeAnyToken();
+
+    do {
+      name += PP.getSpelling(Tok);
+      ConsumeAnyToken();
+    } while ( Tok.isNot(tok::r_paren) &&
+              Tok.isNot(tok::comma) &&
+              Tok.isNot(tok::annot_pragma_openmp_end) );
+  }
+
+  // Parse
+  T.consumeClose();
+
+  Val.get()->getType()->dump();
+
+  llvm::errs() << "val  : " << Val.get() << "\n";
+  llvm::errs() << "name : " << name << "\n";
+
+  return nullptr;
 }
 
