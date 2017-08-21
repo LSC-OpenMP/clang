@@ -2835,30 +2835,38 @@ class OMPDeviceClause : public OMPClause {
   SourceLocation LParenLoc;
   /// \brief Device number.
   Stmt *Device;
+  /// \brief Device name.
+  std::string Name;
   /// \brief Set the device number.
   ///
   /// \param E Device number.
   ///
   void setDevice(Expr *E) { Device = E; }
+  /// \brief Set the device name.
+  ///
+  /// \param Name Device name.
+  ///
+  void setDevice(std::string S) { Name = S; }
 
 public:
   /// \brief Build 'device' clause.
   ///
   /// \param E Expression associated with this clause.
+  /// \param S string associated with this clause.
   /// \param StartLoc Starting location of the clause.
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
   ///
-  OMPDeviceClause(Expr *E, SourceLocation StartLoc, SourceLocation LParenLoc,
-                  SourceLocation EndLoc)
+  OMPDeviceClause(Expr *E, StringRef S, SourceLocation StartLoc,
+                  SourceLocation LParenLoc, SourceLocation EndLoc)
       : OMPClause(OMPC_device, StartLoc, EndLoc), LParenLoc(LParenLoc),
-        Device(E) {}
+        Device(E), Name(S.str()) {}
 
   /// \brief Build an empty clause.
   ///
   OMPDeviceClause()
       : OMPClause(OMPC_device, SourceLocation(), SourceLocation()),
-        LParenLoc(SourceLocation()), Device(nullptr) {}
+        LParenLoc(SourceLocation()), Device(nullptr), Name(nullptr) {}
   /// \brief Sets the location of '('.
   void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
   /// \brief Returns the location of '('.
@@ -2867,6 +2875,10 @@ public:
   Expr *getDevice() { return cast<Expr>(Device); }
   /// \brief Return device number.
   Expr *getDevice() const { return cast<Expr>(Device); }
+  /// \brief Return device name.
+  std::string getName() { return Name; }
+  /// \brief Return device name.
+  std::string getName() const { return Name; }
 
   static bool classof(const OMPClause *T) {
     return T->getClauseKind() == OMPC_device;

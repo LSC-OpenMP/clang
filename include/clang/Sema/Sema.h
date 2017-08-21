@@ -8754,10 +8754,6 @@ public:
                           SourceLocation ColonLoc, ArrayRef<Expr *> VarList,
                           SourceLocation StartLoc, SourceLocation LParenLoc,
                           SourceLocation EndLoc);
-  /// \brief Called on well-formed 'device' clause.
-  OMPClause *ActOnOpenMPDeviceClause(Expr *Device, SourceLocation StartLoc,
-                                     SourceLocation LParenLoc,
-                                     SourceLocation EndLoc);
   /// \brief Called on well-formed 'map' clause.
   OMPClause *
   ActOnOpenMPMapClause(OpenMPMapClauseKind MapTypeModifier,
@@ -8826,6 +8822,19 @@ public:
       CXXScopeSpec &ReductionIdScopeSpec,
       const DeclarationNameInfo &ReductionId,
       ArrayRef<Expr *> UnresolvedReductions = llvm::None);
+
+  OMPClause *ActOnOpenMPSingleExprWithStringClause(OpenMPClauseKind Kind,
+                                                   Expr *Expr,
+                                                   StringRef Name,
+                                                   SourceLocation StartLoc,
+                                                   SourceLocation LParenLoc,
+                                                   SourceLocation EndLoc);
+  /// \brief Called on well-formed 'device' clause.
+  OMPClause *ActOnOpenMPDeviceClause(Expr *Device,
+                                     StringRef Name,
+                                     SourceLocation StartLoc,
+                                     SourceLocation LParenLoc,
+                                     SourceLocation EndLoc);
 
   /// \brief The kind of conversion being performed.
   enum CheckedConversionKind {

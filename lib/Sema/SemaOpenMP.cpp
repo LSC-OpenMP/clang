@@ -6974,9 +6974,6 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_ordered:
     Res = ActOnOpenMPOrderedClause(StartLoc, EndLoc, LParenLoc, Expr);
     break;
-  case OMPC_device:
-    Res = ActOnOpenMPDeviceClause(Expr, StartLoc, LParenLoc, EndLoc);
-    break;
   case OMPC_num_teams:
     Res = ActOnOpenMPNumTeamsClause(Expr, StartLoc, LParenLoc, EndLoc);
     break;
@@ -7035,6 +7032,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_is_device_ptr:
   case OMPC_task_reduction:
   case OMPC_in_reduction:
+  case OMPC_device:
     llvm_unreachable("Clause is not allowed.");
   }
   return Res;
@@ -10178,7 +10176,9 @@ Sema::ActOnOpenMPDependClause(OpenMPDependClauseKind DepKind,
   return C;
 }
 
-OMPClause *Sema::ActOnOpenMPDeviceClause(Expr *Device, SourceLocation StartLoc,
+OMPClause *Sema::ActOnOpenMPDeviceClause(Expr *Device,
+                                         StringRef Name,
+                                         SourceLocation StartLoc,
                                          SourceLocation LParenLoc,
                                          SourceLocation EndLoc) {
   Expr *ValExpr = Device;
@@ -10189,7 +10189,8 @@ OMPClause *Sema::ActOnOpenMPDeviceClause(Expr *Device, SourceLocation StartLoc,
                                  /*StrictlyPositive=*/false))
     return nullptr;
 
-  return new (Context) OMPDeviceClause(ValExpr, StartLoc, LParenLoc, EndLoc);
+  return new (Context) OMPDeviceClause(ValExpr, Name, StartLoc, LParenLoc,
+                                       EndLoc);
 }
 
 static bool IsCXXRecordForMappable(Sema &SemaRef, SourceLocation Loc,
@@ -11880,4 +11881,22 @@ OMPClause *Sema::ActOnOpenMPIsDevicePtrClause(ArrayRef<Expr *> VarList,
   return OMPIsDevicePtrClause::Create(
       Context, StartLoc, LParenLoc, EndLoc, MVLI.ProcessedVarList,
       MVLI.VarBaseDeclarations, MVLI.VarComponents);
+}
+
+OMPClause *Sema::ActOnOpenMPSingleExprWithStringClause(OpenMPClauseKind Kind,
+                                                       Expr *Expr,
+                                                       StringRef Name,
+                                                       SourceLocation StartLoc,
+                                                       SourceLocation LParenLoc,
+                                                       SourceLocation EndLoc) {
+  OMPClause *Res = nullptr;
+  switch (Kind) {
+  case OMPC_device:
+    Res = ActOnOpenMPDeviceClause(Expr, Name, StartLoc, LParenLoc, EndLoc);
+    break;
+  default:
+    llvm_unreachable("Clause is not allowed.");
+  }
+
+  return Res;
 }

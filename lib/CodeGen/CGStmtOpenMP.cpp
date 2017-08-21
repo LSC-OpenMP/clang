@@ -4116,8 +4116,10 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
 
   // Check if we have any device clause associated with the directive.
   const Expr *Device = nullptr;
+  std::string Name = nullptr;
   if (auto *C = S.getSingleClause<OMPDeviceClause>()) {
     Device = C->getDevice();
+    Name = C->getName();
   }
 
   // Check if we have an if clause whose conditional always evaluates to false

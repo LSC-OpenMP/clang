@@ -1934,7 +1934,7 @@ OMPClause *Parser::ParseOpenMPDeviceClause(OpenMPClauseKind Kind) {
                          getOpenMPClauseName(Kind)))
     return nullptr;
 
-  std::string name;
+  std::string Name;
   ExprResult Val;
 
   SourceLocation ELoc = Tok.getLocation();
@@ -1950,7 +1950,7 @@ OMPClause *Parser::ParseOpenMPDeviceClause(OpenMPClauseKind Kind) {
     ConsumeAnyToken();
 
     do {
-      name += PP.getSpelling(Tok);
+      Name += PP.getSpelling(Tok);
       ConsumeAnyToken();
     } while ( Tok.isNot(tok::r_paren) &&
               Tok.isNot(tok::comma) &&
@@ -1960,11 +1960,11 @@ OMPClause *Parser::ParseOpenMPDeviceClause(OpenMPClauseKind Kind) {
   // Parse
   T.consumeClose();
 
-  Val.get()->getType()->dump();
-
-  llvm::errs() << "val  : " << Val.get() << "\n";
-  llvm::errs() << "name : " << name << "\n";
-
-  return nullptr;
+  return Actions.ActOnOpenMPSingleExprWithStringClause(Kind,
+                                                       Val.get(),
+                                                       StringRef(Name),
+                                                       Loc,
+                                                       T.getOpenLocation(),
+                                                       T.getCloseLocation());
 }
 
