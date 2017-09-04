@@ -9194,29 +9194,6 @@ void CGOpenMPRuntime::registerTrackedFunction() {
     registerTargetFunctionDefinition(GD.second);
 }
 
-<<<<<<< HEAD
-void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
-  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
-
-  if (C) {
-    if (C->getUseKind() == OMPC_USE_hrw) {
-      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
-      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
-
-      if (c_module) {
-        this->TgtFPGAModule = c_module->getModuleNameInfo();
-      } else {
-        llvm::errs() << "module clause not specified" << "\n";
-      }
-
-      // if (c_check) {
-      //   llvm::errs() << "check!\n";
-      // }
-    }
-  }
-}
-
-=======
 void CGOpenMPRuntime::emitCall(CodeGenFunction &CGF, llvm::Value *Callee,
                                ArrayRef<llvm::Value *> Args,
                                SourceLocation Loc) const {
@@ -9243,4 +9220,24 @@ Address CGOpenMPRuntime::getParameterAddress(CodeGenFunction &CGF,
                                              const VarDecl *TargetParam) const {
   return CGF.GetAddrOfLocalVar(NativeParam);
 }
->>>>>>> ykt
+
+void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
+  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
+
+  if (C) {
+    if (C->getUseKind() == OMPC_USE_hrw) {
+      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
+      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
+
+      if (c_module) {
+        this->TgtFPGAModule = c_module->getModuleNameInfo();
+      } else {
+        llvm::errs() << "module clause not specified" << "\n";
+      }
+
+      // if (c_check) {
+      //   llvm::errs() << "check!\n";
+      // }
+    }
+  }
+}
