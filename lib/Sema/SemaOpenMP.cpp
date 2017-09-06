@@ -8248,6 +8248,7 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
   case OMPC_hint:
   case OMPC_dist_schedule:
   case OMPC_defaultmap:
+  case OMPC_check:
   case OMPC_unknown:
   case OMPC_uniform:
     llvm_unreachable("Clause is not allowed.");
