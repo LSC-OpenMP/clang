@@ -2763,7 +2763,8 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     CGF.EmitOMPWorksharingLoop(S);
   };
 
-  CGM.getOpenMPRuntime().createFPGAInfo(S);
+  if(CGM.getTriple().isFPGA())
+    CGM.getOpenMPRuntime().createFPGAInfo(S);
 
   emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen);
 }
