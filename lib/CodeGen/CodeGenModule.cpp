@@ -20,6 +20,7 @@
 #include "CGObjCRuntime.h"
 #include "CGOpenCLRuntime.h"
 #include "CGOpenMPRuntime.h"
+#include "CGAClangRuntime.h"
 #include "CGOpenMPRuntimeNVPTX.h"
 #include "CodeGenFunction.h"
 #include "CodeGenPGO.h"
@@ -88,7 +89,11 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
       PreprocessorOpts(PPO), CodeGenOpts(CGO), TheModule(M), Diags(diags),
       Target(C.getTargetInfo()), ABI(createCXXABI(*this)),
       VMContext(M.getContext()), Types(*this), VTables(*this),
-      SanitizerMD(new SanitizerMetadata(*this)) {
+      SanitizerMD(new SanitizerMetadata(*this),
+      /* marcio */
+      OpenMPSupport(*this)
+      /* oicram */
+      ) {
 
   // Initialize the type cache.
   llvm::LLVMContext &LLVMContext = M.getContext();
@@ -119,10 +124,17 @@ CodeGenModule::CodeGenModule(ASTContext &C, const HeaderSearchOptions &HSO,
     createObjCRuntime();
   if (LangOpts.OpenCL)
     createOpenCLRuntime();
-  if (LangOpts.OpenMP)
+  if (LangOpts.OpenMP) {
     createOpenMPRuntime();
+    /* marcio */
+    if (getTriple().isOpenCL() || getTriple().isSPIR()) {
+      createAClangRuntime();
+    }
+    /* oicram */
+  }
   if (LangOpts.CUDA)
     createCUDARuntime();
+
 
   // Enable TBAA unless it's suppressed. ThreadSanitizer needs TBAA even at O0.
   if (LangOpts.Sanitize.has(SanitizerKind::Thread) ||
@@ -206,6 +218,12 @@ void CodeGenModule::createOpenMPRuntime() {
 void CodeGenModule::createCUDARuntime() {
   CUDARuntime.reset(CreateNVCUDARuntime(*this));
 }
+
+/* marcio */
+void CodeGenModule::createAClangRuntime() {
+  AClangRuntime.reset(new CGAClangRuntime(*this));
+}
+/* oicram */
 
 void CodeGenModule::addReplacement(StringRef Name, llvm::Constant *C) {
   Replacements[Name] = C;

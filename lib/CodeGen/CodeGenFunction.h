@@ -2798,6 +2798,31 @@ public:
   /// otherwise.
   bool EmitOMPWorksharingLoop(const OMPLoopDirective &S);
 
+  /* marcio */
+  /// \brief Emit code for the loop-based directives for OpenCL/SPIR target.
+  void EmitOMPLoopAsCLKernel(const OMPLoopDirective &S);
+
+  /// \brief Emit code for the reduction directives for OpenCL/SPIR target.
+  void EmitOMPReductionAsCLKernel(const OMPLoopDirective &S);
+
+  unsigned GetNumNestedLoops(const OMPExecutableDirective &S);
+
+  llvm::Value *EmitHostParameters(ForStmt *FS,
+                                  llvm::raw_fd_ostream &FOS,
+                                  int &num_args,
+                                  bool Collapse,
+                                  unsigned loopNest,
+                                  unsigned lastLoop);
+
+  llvm::Value *EmitSpirDeclRefLValue(const DeclRefExpr *D);
+
+  void HandleStmts(Stmt *ST,
+                   llvm::raw_fd_ostream &CLOS,
+                   unsigned long &num_args,
+                   bool CLgen);
+
+  /* oicram */
+
 private:
   void EmitOMPOuterLoop(bool IsMonotonic, bool DynamicOrOrdered,
                         bool IsDistribute, const OMPLoopDirective &S,

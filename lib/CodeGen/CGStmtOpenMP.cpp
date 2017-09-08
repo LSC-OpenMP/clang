@@ -2513,7 +2513,19 @@ namespace {
   };
 } // namespace
 
+
 bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
+  /* marcio */
+  if (CGM.getTriple().isOpenCL() || CGM.getTriple().isSPIR()) {
+      for (const auto *C : S.getClausesOfKind<OMPReductionClause>()) {
+          CodeGenFunction::EmitOMPReductionAsCLKernel(S);
+          return false;
+      }
+      CodeGenFunction::EmitOMPLoopAsCLKernel(S);
+      return false;
+  }
+  /* oicram */
+
   // Emit the loop iteration variable.
   auto IVExpr = cast<DeclRefExpr>(S.getIterationVariable());
   auto IVDecl = cast<VarDecl>(IVExpr->getDecl());
@@ -3035,6 +3047,9 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     const OMPParallelForDirective &S) {
   // Emit directive as a combined directive that consists of two implicit
   // directives: 'parallel' with 'for' directive.
+  /* marcio */
+  llvm::errs() << "Enter CodeGenFunction::EmitOMPParallelForDirective\n";
+  /* oicram */
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     OMPCancelStackRAII CancelRegion(CGF, OMPD_parallel_for, S.hasCancel());
     CGF.EmitOMPWorksharingLoop(S);
@@ -3043,6 +3058,9 @@ void CodeGenFunction::EmitOMPParallelForDirective(
   CGM.getOpenMPRuntime().createFPGAInfo(S);
 
   emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen);
+  /* marcio */
+  llvm::errs() << "Leave CodeGenFunction::EmitOMPParallelForDirective\n";
+  /* oicram */
 }
 
 void CodeGenFunction::EmitOMPParallelForSimdDirective(

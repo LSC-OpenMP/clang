@@ -8892,12 +8892,20 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
       return nullptr;
     return new SPIR32TargetInfo(Triple, Opts);
   }
+
   case llvm::Triple::spir64: {
     if (Triple.getOS() != llvm::Triple::UnknownOS ||
         Triple.getEnvironment() != llvm::Triple::UnknownEnvironment)
       return nullptr;
     return new SPIR64TargetInfo(Triple, Opts);
   }
+
+  case llvm::Triple::opencl:
+    if (Triple.getOS() != llvm::Triple::UnknownOS ||
+        Triple.getEnvironment() != llvm::Triple::UnknownEnvironment)
+       return nullptr;
+    return new X86_64TargetInfo(Triple, Opts);
+
   case llvm::Triple::wasm32:
     if (!(Triple == llvm::Triple("wasm32-unknown-unknown")))
       return nullptr;

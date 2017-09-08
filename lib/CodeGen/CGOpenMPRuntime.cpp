@@ -7538,6 +7538,10 @@ void CGOpenMPRuntime::emitTargetDataCalls(
     // Fill up the arrays and create the arguments.
     emitOffloadingArrays(CGF, BasePointers, Pointers, Sizes, MapTypes, Info);
 
+    /* marcio */
+    llvm::errs() << "EmittargetDataCalls after Offloading\n";
+    /* oicram */
+
     llvm::Value *BasePointersArrayArg = nullptr;
     llvm::Value *PointersArrayArg = nullptr;
     llvm::Value *SizesArrayArg = nullptr;
@@ -7581,6 +7585,10 @@ void CGOpenMPRuntime::emitTargetDataCalls(
     llvm::Value *MapTypesArrayArg = nullptr;
     emitOffloadingArraysArgument(CGF, BasePointersArrayArg, PointersArrayArg,
                                  SizesArrayArg, MapTypesArrayArg, Info);
+
+    /* marcio */
+    llvm::errs() << "EmittargetDataCalls after Closing the data region\n";
+    /* oicram */
 
     // Emit device ID if any.
     llvm::Value *DeviceID = nullptr;
@@ -7667,6 +7675,10 @@ void CGOpenMPRuntime::emitTargetDataStandAloneCall(
     emitOffloadingArraysArgument(CGF, Info.BasePointersArray,
                                  Info.PointersArray, Info.SizesArray,
                                  Info.MapTypesArray, Info);
+
+    /* marcio */
+    llvm::errs() << "emitTargetDataStandAloneCall after emitOffloading\n";
+    /* oicram */
 
     // Emit device ID if any.
     llvm::Value *DeviceID = nullptr;

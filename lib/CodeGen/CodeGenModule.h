@@ -89,6 +89,9 @@ class CGObjCRuntime;
 class CGOpenCLRuntime;
 class CGOpenMPRuntime;
 class CGCUDARuntime;
+/* marcio */
+class CGAClangRuntime;
+/* oicram */
 class BlockFieldFlags;
 class FunctionArgList;
 class CoverageMappingModuleGen;
@@ -294,6 +297,9 @@ private:
   std::unique_ptr<CGOpenCLRuntime> OpenCLRuntime;
   std::unique_ptr<CGOpenMPRuntime> OpenMPRuntime;
   std::unique_ptr<CGCUDARuntime> CUDARuntime;
+  /* marcio */
+  std::unique_ptr<CGAClangRuntime> AClangRuntime;
+  /* oicram */
   std::unique_ptr<CGDebugInfo> DebugInfo;
   std::unique_ptr<ObjCEntrypoints> ObjCData;
   llvm::MDNode *NoObjCARCExceptionsMetadata = nullptr;
@@ -451,6 +457,9 @@ private:
   void createOpenCLRuntime();
   void createOpenMPRuntime();
   void createCUDARuntime();
+  /* marcio */
+  void createAClangRuntime();
+  /* oicram */
 
   bool isTriviallyRecursive(const FunctionDecl *F);
   bool shouldEmitFunction(GlobalDecl GD);
@@ -540,6 +549,13 @@ public:
     assert(CUDARuntime != nullptr);
     return *CUDARuntime;
   }
+
+  /* marcio */
+  CGAClangRuntime &getAClangRuntime() {
+      assert(AClangRuntime != nullptr);
+      return *AClangRuntime;
+  }
+  /* oicram */
 
   ObjCEntrypoints &getObjCEntrypoints() const {
     assert(ObjCData != nullptr);
@@ -1188,6 +1204,163 @@ public:
   /// \param T is the LLVM type of the null pointer.
   /// \param QT is the clang QualType of the null pointer.
   llvm::Constant *getNullPointer(llvm::PointerType *T, QualType QT);
+
+/* marcio */
+
+  /// Name of the include file used by omp declare target constructs
+  std::string IncludeStr = "";
+
+  class OpenMPSupportStackTy {
+        struct OMPStackElemTy {
+            CodeGenModule &CGM;
+            llvm::SmallVector<llvm::Value*,16> MapPointers;
+            llvm::SmallVector<llvm::Value*,16> MapSizes;
+            llvm::SmallVector<QualType,16> MapQualTypes;
+            llvm::SmallVector<unsigned,16> MapTypes;
+            llvm::SmallVector<unsigned,16> MapPositions;
+            llvm::SmallVector<unsigned, 16> MapScopes;
+            llvm::SmallVector<llvm::Value*,16> KernelVars;
+            llvm::SmallVector<QualType, 16> KernelTypes;
+            llvm::SmallVector<llvm::Value*,16> LocalVars;
+            llvm::SmallVector<QualType, 16> LocalTypes;
+            llvm::SmallVector<llvm::Value*,16> ScopVars;
+            llvm::SmallVector<QualType, 16> ScopTypes;
+            std::string KernelName;
+            OMPStackElemTy(CodeGenModule &CGM): CGM(CGM) {}
+            ~OMPStackElemTy() {}
+        };
+        typedef llvm::SmallVector<OMPStackElemTy, 16> OMPStackTy;
+        OMPStackTy OpenMPStack;
+        CodeGenModule &CGM;
+    public:
+        OpenMPSupportStackTy(CodeGenModule &CGM)
+                : OpenMPStack(), CGM(CGM) {}
+
+        void startOpenMPRegion() {
+            OpenMPStack.push_back(OMPStackElemTy(CGM));
+        }
+
+        void endOpenMPRegion() {
+            assert(!OpenMPStack.empty() && "OpenMP region is not started.");
+            OpenMPStack.pop_back();
+        }
+
+        void getMapData(ArrayRef<llvm::Value*> &MapPointers,
+                        ArrayRef<llvm::Value*> &MapSizes,
+                        ArrayRef<QualType> &MapQualTypes,
+                        ArrayRef<unsigned> &MapTypes);
+
+        void addMapData(llvm::Value *MapPointer,
+                        llvm::Value *MapSize,
+                        QualType MapQualType,
+                        unsigned MapType);
+
+        void getMapPos(ArrayRef<llvm::Value*> &MapPointers,
+                       ArrayRef<llvm::Value*> &MapSizes,
+                       ArrayRef<QualType> &MapQualTypes,
+                       ArrayRef<unsigned> &MapTypes,
+                       ArrayRef<unsigned> &MapPositions,
+                       ArrayRef<unsigned> &MapScopes);
+
+        void addMapPos(llvm::Value *MapPointer,
+                       llvm::Value *MapSize,
+                       QualType MapQualType,
+                       unsigned MapType,
+                       unsigned MapPosition,
+                       unsigned MapScope);
+
+        unsigned long getMapSize() {
+            return OpenMPStack.back().MapPointers.size();
+        }
+
+        void addKernelVar(llvm::Value *KernelVar) {
+            OpenMPStack.back().KernelVars.push_back(KernelVar);
+        }
+
+        void addKernelType(QualType KernelType) {
+            OpenMPStack.back().KernelTypes.push_back(KernelType);
+        }
+
+        void clearKernelVars() {
+            OpenMPStack.back().KernelVars.clear();
+            OpenMPStack.back().KernelTypes.clear();
+        }
+
+        bool isKernelVar(llvm::Value *KernelVar);
+
+        unsigned long getKernelVarSize() {
+            return OpenMPStack.back().KernelVars.size();
+        }
+
+        void PrintMapped(OMPStackElemTy *elem);
+        void PrintAllStack();
+        void InheritMapPos();
+
+        void addLocalVar(llvm::Value *LocalVar) {
+            OpenMPStack.back().LocalVars.push_back(LocalVar);
+        }
+
+        void addLocalType(QualType LocalType) {
+            OpenMPStack.back().LocalTypes.push_back(LocalType);
+        }
+
+        void clearLocalVars() {
+            OpenMPStack.back().LocalVars.clear();
+            OpenMPStack.back().LocalTypes.clear();
+        }
+
+        bool inLocalScope(llvm::Value *LocalVar);
+
+        void getLocalVars(SmallVector<llvm::Value*,16> &LocalVars) {
+            LocalVars = OpenMPStack.back().LocalVars;
+        }
+
+        void getLocalTypes(SmallVector<QualType,16> &LocalTypes) {
+            LocalTypes = OpenMPStack.back().LocalTypes;
+        }
+
+        void addScopVar(llvm::Value *ScopVar) {
+            OpenMPStack.back().ScopVars.push_back(ScopVar);
+        }
+
+        void addScopType(QualType ScopType) {
+            OpenMPStack.back().ScopTypes.push_back(ScopType);
+        }
+
+        void clearScopVars() {
+            OpenMPStack.back().ScopVars.clear();
+            OpenMPStack.back().ScopTypes.clear();
+        }
+
+        bool isScopVar(llvm::Value *ScopVar);
+
+        unsigned long getScopVarSize() {
+            return OpenMPStack.back().ScopVars.size();
+        }
+
+        int createTempFile() {
+            char *tmpName = strdup("kernel_XXXXXX");
+            int fd = mkstemp (tmpName);
+            OpenMPStack.back().KernelName = std::string(tmpName);
+            return fd;
+        }
+
+        std::string getTempName() {
+            return OpenMPStack.back().KernelName;
+        }
+
+        std::string getIncludeStr() {
+            return CGM.IncludeStr;
+        }
+
+        void appendIncludeStr(std::string incStr) {
+            CGM.IncludeStr += incStr;
+        }
+    };
+
+    OpenMPSupportStackTy OpenMPSupport;
+
+/* oicram */
 
 private:
   llvm::Constant *
