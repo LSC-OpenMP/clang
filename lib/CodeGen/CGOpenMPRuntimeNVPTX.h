@@ -31,28 +31,14 @@ class CGOpenMPRuntimeNVPTX : public CGOpenMPRuntime {
   /// \param CGF Reference to current CodeGenFunction.
   /// \param Loc Clang source location.
   /// \param SchedKind Schedule kind, specified by the 'dist_schedule' clause.
-  /// \param IVSize Size of the iteration variable in bits.
-  /// \param IVSigned Sign of the interation variable.
-  /// \param Ordered true if loop is ordered, false otherwise.
-  /// \param IL Address of the output variable in which the flag of the
-  /// last iteration is returned.
-  /// \param LB Address of the output variable in which the lower iteration
-  /// number is returned.
-  /// \param UB Address of the output variable in which the upper iteration
-  /// number is returned.
-  /// \param ST Address of the output variable in which the stride value is
-  /// returned nesessary to generated the static_chunked scheduled loop.
-  /// \param Chunk Value of the chunk for the static_chunked scheduled loop.
-  /// For the default (nullptr) value, the chunk 1 will be used.
+  /// \param Values Input arguments for the construct.
   /// \param CoalescedDistSchedule Indicates if coalesced scheduling type is
   /// required.
   ///
   virtual void
   emitDistributeStaticInit(CodeGenFunction &CGF, SourceLocation Loc,
                            OpenMPDistScheduleClauseKind SchedKind,
-                           unsigned IVSize, bool IVSigned, bool Ordered,
-                           Address IL, Address LB, Address UB, Address ST,
-                           llvm::Value *Chunk = nullptr,
+                           const StaticRTInput &Values,
                            bool CoalescedDistSchedule = false) override;
 
   /// \brief Call the appropriate runtime routine to notify that we finished
@@ -129,8 +115,35 @@ public:
     // being shared is a reference and not the variable original storage.
     llvm::SmallVector<std::pair<const VarDecl *, DataSharingType>, 8>
         CapturesValues;
+    llvm::SmallVector<std::pair<const Expr*, const VarDecl *>, 8>
+        VLADeclMap;
+
     void add(const VarDecl *VD, DataSharingType DST) {
       CapturesValues.push_back(std::make_pair(VD, DST));
+    }
+
+    void addVLADecl(const Expr* VATExpr, const VarDecl *VD) {
+      // VLADeclMap[VATExpr] = VD;
+      VLADeclMap.push_back(std::make_pair(VATExpr, VD));
+    }
+
+    const VarDecl *getVLADecl(const Expr* VATExpr) const {
+      for (auto ExprDeclPair : VLADeclMap) {
+        if (ExprDeclPair.first == VATExpr) {
+          return ExprDeclPair.second;
+        }
+      }
+      assert(false && "No VAT expression that matches the input");
+      return nullptr;
+    }
+
+    bool isVLADecl(const VarDecl* VD) const {
+      for (auto ExprDeclPair : VLADeclMap) {
+        if (ExprDeclPair.second == VD) {
+          return true;
+        }
+      }
+      return false;
     }
 
     // The record type of the sharing region if shared by the master.
@@ -743,6 +756,25 @@ public:
                              ArrayRef<const Expr *> ReductionOps,
                              bool WithNowait, bool SimpleReduction,
                              OpenMPDirectiveKind ReductionKind) override;
+
+  /// Translates the native parameter of outlined function if this is required
+  /// for target.
+  /// \param FD Field decl from captured record for the paramater.
+  /// \param NativeParam Parameter itself.
+  const VarDecl *translateParameter(const FieldDecl *FD,
+                                    const VarDecl *NativeParam) const override;
+
+  /// Gets the address of the native argument basing on the address of the
+  /// target-specific parameter.
+  /// \param NativeParam Parameter itself.
+  /// \param TargetParam Corresponding target-specific parameter.
+  Address getParameterAddress(CodeGenFunction &CGF, const VarDecl *NativeParam,
+                              const VarDecl *TargetParam) const override;
+
+  /// Emits call of the outlined function with the provided arguments.
+  void emitOutlinedFunctionCall(
+      CodeGenFunction &CGF, SourceLocation Loc, llvm::Value *OutlinedFn,
+      ArrayRef<llvm::Value *> Args = llvm::None) const override;
 };
 
 } // CodeGen namespace.

@@ -249,20 +249,18 @@ public:
 
 /// Get the GPU warp size.
 static llvm::Value *GetNVPTXWarpSize(CodeGenFunction &CGF) {
-  CGBuilderTy &Bld = CGF.Builder;
-  return Bld.CreateCall(
+  return CGF.EmitRuntimeCall(
       llvm::Intrinsic::getDeclaration(
           &CGF.CGM.getModule(), llvm::Intrinsic::nvvm_read_ptx_sreg_warpsize),
-      llvm::None, "nvptx_warp_size");
+      "nvptx_warp_size");
 }
 
 /// Get the id of the current thread on the GPU.
 static llvm::Value *GetNVPTXThreadID(CodeGenFunction &CGF) {
-  CGBuilderTy &Bld = CGF.Builder;
-  return Bld.CreateCall(
+  return CGF.EmitRuntimeCall(
       llvm::Intrinsic::getDeclaration(
           &CGF.CGM.getModule(), llvm::Intrinsic::nvvm_read_ptx_sreg_tid_x),
-      llvm::None, "nvptx_tid");
+      "nvptx_tid");
 }
 
 /// Get the id of the warp in the block.
@@ -281,26 +279,23 @@ static llvm::Value *GetNVPTXThreadWarpID(CodeGenFunction &CGF) {
 
 /// Get the id of the current block on the GPU.
 static llvm::Value *GetNVPTXBlockID(CodeGenFunction &CGF) {
-  CGBuilderTy &Bld = CGF.Builder;
-  return Bld.CreateCall(
+  return CGF.EmitRuntimeCall(
       llvm::Intrinsic::getDeclaration(
           &CGF.CGM.getModule(), llvm::Intrinsic::nvvm_read_ptx_sreg_ctaid_x),
-      llvm::None, "nvptx_block_id");
+      "nvptx_block_id");
 }
 
 /// Get the maximum number of threads in a block of the GPU.
 static llvm::Value *GetNVPTXNumThreads(CodeGenFunction &CGF) {
-  CGBuilderTy &Bld = CGF.Builder;
-  return Bld.CreateCall(
+  return CGF.EmitRuntimeCall(
       llvm::Intrinsic::getDeclaration(
           &CGF.CGM.getModule(), llvm::Intrinsic::nvvm_read_ptx_sreg_ntid_x),
-      llvm::None, "nvptx_num_threads");
+      "nvptx_num_threads");
 }
 
 /// Get barrier to synchronize all threads in a block.
 static void GetNVPTXCTABarrier(CodeGenFunction &CGF) {
-  CGBuilderTy &Bld = CGF.Builder;
-  Bld.CreateCall(llvm::Intrinsic::getDeclaration(
+  CGF.EmitRuntimeCall(llvm::Intrinsic::getDeclaration(
       &CGF.CGM.getModule(), llvm::Intrinsic::nvvm_barrier0));
 }
 
@@ -310,9 +305,9 @@ static void GetNVPTXBarrier(CodeGenFunction &CGF, int ID,
                             llvm::Value *NumThreadsVal) {
   CGBuilderTy &Bld = CGF.Builder;
   llvm::Value *Args[] = {Bld.getInt32(ID), NumThreadsVal};
-  Bld.CreateCall(llvm::Intrinsic::getDeclaration(&CGF.CGM.getModule(),
-                                                 llvm::Intrinsic::nvvm_barrier),
-                 Args);
+  CGF.EmitRuntimeCall(llvm::Intrinsic::getDeclaration(
+                          &CGF.CGM.getModule(), llvm::Intrinsic::nvvm_barrier),
+                      Args);
 }
 
 /// Synchronize all GPU threads in a block.
@@ -383,11 +378,10 @@ CGOpenMPRuntimeNVPTX::getNVPTXWarpActiveThreadsMask(CodeGenFunction &CGF) {
 // \brief Get the number of active threads in a warp.
 llvm::Value *
 CGOpenMPRuntimeNVPTX::getNVPTXWarpActiveNumThreads(CodeGenFunction &CGF) {
-  CGBuilderTy &Bld = CGF.Builder;
-  return Bld.CreateCall(llvm::Intrinsic::getDeclaration(
-                            &CGM.getModule(), llvm::Intrinsic::nvvm_popc_i),
-                        getNVPTXWarpActiveThreadsMask(CGF),
-                        "warp_active_num_threads");
+  return CGF.EmitRuntimeCall(
+      llvm::Intrinsic::getDeclaration(&CGM.getModule(),
+                                      llvm::Intrinsic::nvvm_popc_i),
+      getNVPTXWarpActiveThreadsMask(CGF), "warp_active_num_threads");
 }
 
 // \brief Get the ID of the thread among the current active threads in the warp.
@@ -402,9 +396,10 @@ CGOpenMPRuntimeNVPTX::getNVPTXWarpActiveThreadID(CodeGenFunction &CGF) {
   auto *Mask = getNVPTXWarpActiveThreadsMask(CGF);
   auto *ShNum = Bld.CreateSub(Bld.getInt32(32), WarpID);
   auto *Sh = Bld.CreateShl(Mask, ShNum);
-  return Bld.CreateCall(llvm::Intrinsic::getDeclaration(
-                            &CGM.getModule(), llvm::Intrinsic::nvvm_popc_i),
-                        Sh, "warp_active_thread_id");
+  return CGF.EmitRuntimeCall(
+      llvm::Intrinsic::getDeclaration(&CGM.getModule(),
+                                      llvm::Intrinsic::nvvm_popc_i),
+      Sh, "warp_active_thread_id");
 }
 
 // \brief Get a conditional that is set to true if the thread is the master of
@@ -418,12 +413,10 @@ CGOpenMPRuntimeNVPTX::getNVPTXIsWarpActiveMaster(CodeGenFunction &CGF) {
 
 void CGOpenMPRuntimeNVPTX::emitDistributeStaticInit(
     CodeGenFunction &CGF, SourceLocation Loc,
-    OpenMPDistScheduleClauseKind SchedKind, unsigned IVSize, bool IVSigned,
-    bool Ordered, Address IL, Address LB, Address UB, Address ST,
-    llvm::Value *Chunk, bool CoalescedDistSchedule) {
-  CGOpenMPRuntime::emitDistributeStaticInit(CGF, Loc, SchedKind, IVSize,
-                                            IVSigned, Ordered, IL, LB, UB, ST,
-                                            Chunk, CoalescedDistSchedule);
+    OpenMPDistScheduleClauseKind SchedKind, const StaticRTInput &Values,
+    bool CoalescedDistSchedule) {
+  CGOpenMPRuntime::emitDistributeStaticInit(CGF, Loc, SchedKind, Values,
+                                            CoalescedDistSchedule);
 
   // If we are generating a coalesced schedule for the directive
   // 'target teams distribute parallel for', then the 'distribute' and 'for'
@@ -638,9 +631,10 @@ void CGOpenMPRuntimeNVPTX::initializeDataSharing(CodeGenFunction &CGF,
       CastedSlot,
       llvm::ConstantInt::get(CGM.SizeTy, IsMaster ? DS_Slot_Size
                                                   : DS_Worker_Warp_Slot_Size)};
-  Bld.CreateCall(createNVPTXRuntimeFunction(
-                     OMPRTL_NVPTX__kmpc_initialize_data_sharing_environment),
-                 Args);
+  CGF.EmitRuntimeCall(
+      createNVPTXRuntimeFunction(
+          OMPRTL_NVPTX__kmpc_initialize_data_sharing_environment),
+      Args);
 
   CGF.EmitBlock(EndBB);
   return;
@@ -714,7 +708,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createKernelInitializerFunction(
 
     CGF.EmitBlock(WorkerBB);
     initializeDataSharing(CGF, /*IsMaster=*/false);
-    Bld.CreateCall(WorkerFunction);
+    emitCall(CGF, WorkerFunction);
     CGF.EmitBranch(ExitBB);
   } else {
     // Initialize the state of the OpenMP runtime library on the GPU.
@@ -734,7 +728,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createKernelInitializerFunction(
     Bld.CreateCondBr(IsWorker, WorkerBB, ExitBB);
 
     CGF.EmitBlock(WorkerBB);
-    Bld.CreateCall(WorkerFunction);
+    emitCall(CGF, WorkerFunction);
     CGF.EmitBranch(ExitBB);
   }
 
@@ -1320,14 +1314,18 @@ void CGOpenMPRuntimeNVPTX::TargetKernelProperties::setMasterSharedDataSize() {
         ElemTy = (*I)->getType();
       const VarDecl *CurVD = nullptr;
 
-      if (CurField->hasCapturedVLAType()) {
-        continue;
-      } else if (CurCap->capturesThis()) {
+      if (CurCap->capturesThis()) {
         // We use null to indicate 'this'.
         CurVD = nullptr;
       } else {
         // Get the variable that is initializing the capture.
-        CurVD = CurCap->getCapturedVar();
+        if (CurField->hasCapturedVLAType()) {
+          ElemTy = C.getSizeType();
+          CurVD = ImplicitParamDecl::Create(C, ElemTy,
+              ImplicitParamDecl::Other);
+        } else {
+          CurVD = CurCap->getCapturedVar();
+        }
 
         // If this is an OpenMP capture declaration, we need to look at the
         // original declaration.
@@ -1439,6 +1437,8 @@ void CGOpenMPRuntimeNVPTX::emitWorkerFunction(WorkerFunctionState &WST) {
   auto &Ctx = CGM.getContext();
 
   CodeGenFunction CGF(CGM, /*suppressNewContext=*/true);
+  // We don't need debug information in this function as nothing here refers to
+  // user code.
   CGF.disableDebugInfo();
   CGF.StartFunction(GlobalDecl(), Ctx.VoidTy, WST.WorkerFn, *WST.CGFI, {});
   emitWorkerLoop(CGF, WST);
@@ -1510,8 +1510,8 @@ void CGOpenMPRuntimeNVPTX::emitWorkerLoop(CodeGenFunction &CGF,
     if (Work.size() == 1) {
       // Insert call to work function. We pass the master has source thread ID.
       auto Fn = cast<llvm::Function>(Work[0]);
-      CGF.EmitCallOrInvoke(
-          Fn, {Bld.getInt16(/*ParallelLevel=*/0), GetMasterThreadID(CGF)});
+      emitCall(CGF, Fn,
+               {Bld.getInt16(/*ParallelLevel=*/0), GetMasterThreadID(CGF)});
     }
 
     // Go to end of parallel region.
@@ -1533,8 +1533,8 @@ void CGOpenMPRuntimeNVPTX::emitWorkerLoop(CodeGenFunction &CGF,
 
       // Insert call to work function. We pass the master has source thread ID.
       auto Fn = cast<llvm::Function>(W);
-      CGF.EmitCallOrInvoke(
-          Fn, {Bld.getInt16(/*ParallelLevel=*/0), GetMasterThreadID(CGF)});
+      emitCall(CGF, Fn,
+               {Bld.getInt16(/*ParallelLevel=*/0), GetMasterThreadID(CGF)});
 
       // Go to end of parallel region.
       CGF.EmitBranch(TerminateBB);
@@ -1551,8 +1551,8 @@ void CGOpenMPRuntimeNVPTX::emitWorkerLoop(CodeGenFunction &CGF,
                                   /*isVarArg*/ false)
               ->getPointerTo();
       auto WorkFnCast = Bld.CreateBitCast(WorkID, ParallelFnTy);
-      CGF.EmitCallOrInvoke(WorkFnCast, {Bld.getInt16(/*ParallelLevel=*/0),
-                                        GetMasterThreadID(CGF)});
+      emitCall(CGF, WorkFnCast,
+               {Bld.getInt16(/*ParallelLevel=*/0), GetMasterThreadID(CGF)});
       // Go to end of parallel region.
       CGF.EmitBranch(TerminateBB);
     }
@@ -1685,7 +1685,6 @@ void CGOpenMPRuntimeNVPTX::emitSPMDEntryHeader(
     CodeGenFunction &CGF, EntryFunctionState &EST,
     const OMPExecutableDirective &D) {
   auto &Bld = CGF.Builder;
-
   // Setup BBs in entry function.
   llvm::BasicBlock *ExecuteBB = CGF.createBasicBlock(".execute");
   EST.ExitBB = CGF.createBasicBlock(".sleepy.hollow");
@@ -2943,6 +2942,7 @@ void CGOpenMPRuntimeNVPTX::createDataSharingInfo(CodeGenFunction &CGF) {
   SharedWarpRD->startDefinition();
 
   llvm::SmallSet<const VarDecl *, 32> AlreadySharedDecls;
+  ASTContext &Ctx = CGF.getContext();
   for (auto *Dir : CapturedDirs) {
     const CapturedStmt *CS = cast<CapturedStmt>(Dir->getAssociatedStmt());
     const RecordDecl *RD = CS->getCapturedRecordDecl();
@@ -2960,14 +2960,24 @@ void CGOpenMPRuntimeNVPTX::createDataSharingInfo(CodeGenFunction &CGF) {
       // Track the data sharing type.
       DataSharingInfo::DataSharingType DST = DataSharingInfo::DST_Val;
 
-      if (CurField->hasCapturedVLAType()) {
-        continue;
-      } else if (CurCap->capturesThis()) {
+      if (CurCap->capturesThis()) {
         // We use null to indicate 'this'.
         CurVD = nullptr;
       } else {
         // Get the variable that is initializing the capture.
-        CurVD = CurCap->getCapturedVar();
+        if (CurField->hasCapturedVLAType()) {
+          auto VAT = CurField->getCapturedVLAType();
+          ElemTy = Ctx.getSizeType();
+          CurVD = ImplicitParamDecl::Create(Ctx, ElemTy,
+              ImplicitParamDecl::Other);
+          CGF.EmitVarDecl(*CurVD);
+          CGF.Builder.CreateAlignedStore(CGF.Builder.CreateIntCast(
+              CGF.VLASizeMap[VAT->getSizeExpr()], CGM.SizeTy, false),
+              CGF.GetAddrOfLocalVar(CurVD).getPointer(),
+              CGF.getPointerAlign());
+          Info.addVLADecl(VAT->getSizeExpr(), CurVD);
+        } else
+          CurVD = CurCap->getCapturedVar();
 
         // If this is an OpenMP capture declaration, we need to look at the
         // original declaration.
@@ -3149,7 +3159,6 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
   auto CapturesIt = DSI.CapturesValues.begin();
   for (auto *F : MasterRD->fields()) {
     QualType ArgTy = F->getType();
-
     if (ArgTy->isVariablyModifiedType()) {
       bool IsReference = ArgTy->isLValueReferenceType();
       ArgTy = Ctx.getCanonicalParamType(ArgTy.getNonReferenceType());
@@ -3203,6 +3212,9 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
   Fn->setLinkage(llvm::GlobalValue::InternalLinkage);
 
   CodeGenFunction CGF(CGM, /*suppressNewContext=*/true);
+  // We don't need debug information in this function as nothing here refers to
+  // user code.
+  CGF.disableDebugInfo();
   CGF.StartFunction(GlobalDecl(), Ctx.VoidTy, Fn, CGFI, ArgList);
 
   // If this is an entry point, all the threads except the master should skip
@@ -3244,7 +3256,9 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
   SmallVector<Address, 32> NewAddressPtrs;
   SmallVector<Address, 32> OrigAddresses;
   // We iterate two by two.
-  for (auto CapturesIt = DSI.CapturesValues.begin(); ArgsIt != ArgList.end();
+  for (auto CapturesIt = DSI.CapturesValues.begin();
+       // !(CapturesIt == DSI.CapturesValues.end() || ArgsIt == ArgList.end());
+       ArgsIt != ArgList.end();
        ++ArgsIt, ++CapturesIt) {
     if (CapturesIt->second != DataSharingInfo::DST_Ref) {
       NewAddressPtrs.push_back(
@@ -3276,10 +3290,10 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
                            DataSize,
                            DefaultDataSize,
                            Bld.getInt16(isOMPRuntimeInitialized() ? 1 : 0)};
-    auto *DataShareAddr =
-        Bld.CreateCall(createNVPTXRuntimeFunction(
-                           OMPRTL_NVPTX__kmpc_data_sharing_environment_begin),
-                       Args, "data_share_master_addr");
+    auto *DataShareAddr = CGF.EmitRuntimeCall(
+        createNVPTXRuntimeFunction(
+            OMPRTL_NVPTX__kmpc_data_sharing_environment_begin),
+        Args, "data_share_master_addr");
     auto DataSharePtrQTy = Ctx.getPointerType(DSI.MasterRecordType);
     auto *DataSharePtrTy = CGF.getTypes().ConvertTypeForMem(DataSharePtrQTy);
     auto *CasterDataShareAddr =
@@ -3338,10 +3352,10 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
                            DataSize,
                            DefaultDataSize,
                            /*isOMPRuntimeInitialized=*/Bld.getInt16(1)};
-    auto *DataShareAddr =
-        Bld.CreateCall(createNVPTXRuntimeFunction(
-                           OMPRTL_NVPTX__kmpc_data_sharing_environment_begin),
-                       Args, "data_share_master_addr");
+    auto *DataShareAddr = CGF.EmitRuntimeCall(
+        createNVPTXRuntimeFunction(
+            OMPRTL_NVPTX__kmpc_data_sharing_environment_begin),
+        Args, "data_share_master_addr");
     auto DataSharePtrQTy = Ctx.getPointerType(DSI.WorkerWarpRecordType);
     auto *DataSharePtrTy = CGF.getTypes().ConvertTypeForMem(DataSharePtrQTy);
     auto *CasterDataShareAddr =
@@ -3412,12 +3426,18 @@ void CGOpenMPRuntimeNVPTX::createDataSharingPerFunctionInfrastructure(
   for (unsigned i = 0; i < OrigAddresses.size(); ++i, ++FI) {
     llvm::Value *OriginalVal = nullptr;
     if (const VarDecl *VD = DSI.CapturesValues[i].first) {
-      DeclRefExpr DRE(const_cast<VarDecl *>(VD),
+      if (DSI.isVLADecl(VD)) {
+        EnclosingCGF.EmitOMPHelperVar(VD);
+        Address OriginalAddr = EnclosingCGF.GetAddrOfLocalVar(VD);
+        OriginalVal = OriginalAddr.getPointer();
+      } else {
+        DeclRefExpr DRE(const_cast<VarDecl *>(VD),
                       /*RefersToEnclosingVariableOrCapture=*/false,
                       VD->getType().getNonReferenceType(), VK_LValue,
                       SourceLocation());
-      Address OriginalAddr = EnclosingCGF.EmitOMPHelperVar(&DRE).getAddress();
-      OriginalVal = OriginalAddr.getPointer();
+        Address OriginalAddr = EnclosingCGF.EmitOMPHelperVar(&DRE).getAddress();
+        OriginalVal = OriginalAddr.getPointer();
+      }
     } else
       OriginalVal = CGF.LoadCXXThis();
 
@@ -3506,6 +3526,9 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
   Fn->setLinkage(llvm::GlobalValue::InternalLinkage);
 
   CodeGenFunction CGF(CGM, /*suppressNewContext=*/true);
+  // We don't need debug information in this function as nothing here refers to
+  // user code.
+  CGF.disableDebugInfo();
   CGF.StartFunction(GlobalDecl(), Ctx.VoidTy, Fn, CGFI, WrapperArgs);
 
   // Get the parallelism level (L0, L1, L2+).
@@ -3519,37 +3542,32 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
   // Create temporary variables to contain the new args.
   SmallVector<Address, 32> ArgsAddresses;
 
-  int NameIdx = 0;
+  // Get the data sharing information for the context that encloses the current
+  // one.
+  auto &DSI = getDataSharingInfo(CurrentContext);
+
   auto *RD = CS.getCapturedRecordDecl();
   auto CurField = RD->field_begin();
   for (CapturedStmt::const_capture_iterator CI = CS.capture_begin(),
                                             CE = CS.capture_end();
        CI != CE; ++CI, ++CurField) {
     QualType ElemTy = CurField->getType();
-
-    if (CI->capturesVariableArrayType()){
-      ArgsAddresses.push_back(CGF.CreateMemTemp(ElemTy, "vla.addr." + std::to_string(NameIdx)));
-      NameIdx++;
-      continue;
-    }
-
     StringRef Name;
-    if (CI->capturesThis())
+
+    if (CI->capturesVariableArrayType())
+      Name = "vla";
+    else if (CI->capturesThis())
       Name = "this";
     else
       Name = CI->getCapturedVar()->getName();
 
     // If this is a capture by copy the element type has to be the pointer to
     // the data.
-    if (CI->capturesVariableByCopy())
+    if (CI->capturesVariableByCopy() || CI->capturesVariableArrayType())
       ElemTy = Ctx.getPointerType(ElemTy);
 
     ArgsAddresses.push_back(CGF.CreateMemTemp(ElemTy, Name + ".addr"));
   }
-
-  // Get the data sharing information for the context that encloses the current
-  // one.
-  auto &DSI = getDataSharingInfo(CurrentContext);
 
   // If this region is sharing loop bounds we need to create the local variables
   // to store the right addresses.
@@ -3567,7 +3585,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
     auto &Bld = CGF.Builder;
 
     // In the Level 0 regions, we need to get the record of the master thread.
-    auto *DataAddr = Bld.CreateCall(
+    auto *DataAddr = CGF.EmitRuntimeCall(
         createNVPTXRuntimeFunction(
             OMPRTL_NVPTX__kmpc_get_data_sharing_environment_frame),
         {GetMasterThreadID(CGF),
@@ -3579,17 +3597,23 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
     // For each capture obtain the pointer by calculating the right offset in
     // the host record.
     unsigned ArgsIdx = 0;
+    auto CurField = RD->field_begin();
     auto FI =
         DSI.MasterRecordType->getAs<RecordType>()->getDecl()->field_begin();
     for (CapturedStmt::const_capture_iterator CI = CS.capture_begin(),
                                               CE = CS.capture_end();
-         CI != CE; ++CI) {
+         CI != CE; ++CI, ++CurField) {
+      const VarDecl *VD;
+      if (CurField->hasCapturedVLAType() != CI->capturesVariableArrayType())
+        assert(false && "These values should match!");
+
       if (CI->capturesVariableArrayType()){
-        // Create Value store
-        ++ArgsIdx;
-        continue;
+        // Get declaration
+        auto VAT = CurField->getCapturedVLAType();
+        VD = DSI.getVLADecl(VAT->getSizeExpr());
+      } else {
+        VD = CI->capturesThis() ? nullptr : CI->getCapturedVar();
       }
-      const VarDecl *VD = CI->capturesThis() ? nullptr : CI->getCapturedVar();
       CreateAddressStoreForVariable(CGF, VD, FI->getType(), DSI, CastedDataAddr,
                                     ArgsAddresses[ArgsIdx]);
       ++FI;
@@ -3613,7 +3637,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
 
     // In the Level 1 regions, we need to get the record of the current worker
     // thread.
-    auto *DataAddr = Bld.CreateCall(
+    auto *DataAddr = CGF.EmitRuntimeCall(
         createNVPTXRuntimeFunction(
             OMPRTL_NVPTX__kmpc_get_data_sharing_environment_frame),
         {GetNVPTXThreadID(CGF),
@@ -3625,16 +3649,19 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
     // For each capture obtain the pointer by calculating the right offset in
     // the host record.
     unsigned ArgsIdx = 0;
+    auto CurField = RD->field_begin();
     auto FI =
         DSI.MasterRecordType->getAs<RecordType>()->getDecl()->field_begin();
     for (CapturedStmt::const_capture_iterator CI = CS.capture_begin(),
                                               CE = CS.capture_end();
-         CI != CE; ++CI, ++ArgsIdx) {
+         CI != CE; ++CI, ++ArgsIdx, ++CurField) {
+      const VarDecl *VD;
       if (CI->capturesVariableArrayType()){
-        // Create Value store
-        continue;
-      }
-      const VarDecl *VD = CI->capturesThis() ? nullptr : CI->getCapturedVar();
+        // Get declaration
+        auto VAT = CurField->getCapturedVLAType();
+        VD = DSI.getVLADecl(VAT->getSizeExpr());
+      } else
+        VD = CI->capturesThis() ? nullptr : CI->getCapturedVar();
       CreateAddressStoreForVariable(CGF, VD, FI->getType(), DSI, CastedDataAddr,
                                     ArgsAddresses[ArgsIdx], SourceLaneID);
       FI++;
@@ -3708,22 +3735,24 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
   auto CI = CS.capture_begin();
   auto CurrentField = RD->field_begin();
   for (unsigned i = 0/*, ArgIdx = 0*/; i < CS.capture_size(); ++i, ++CI, ++CapInfo, ++CurrentField) {
-    if (CI->capturesVariableArrayType()) {
-      auto CapturedTy = CurrentField->getType();
-      auto *Arg = CGF.EmitLoadOfScalar(ArgsAddresses[i], /*Volatile=*/false,
-                                       Ctx.getPointerType(CapturedTy),
-                                       SourceLocation());
-      Args.push_back(Arg);
-      continue;
-    }
-
     auto *Arg = CGF.EmitLoadOfScalar(ArgsAddresses[i], /*Volatile=*/false,
                                      Ctx.getPointerType(FI->getType()),
                                      SourceLocation());
+
+    const VarDecl *CapturedVar;
+    if (CI->capturesVariableArrayType()) {
+      auto VAT = CurrentField->getCapturedVLAType();
+      CapturedVar = DSI.getVLADecl(VAT->getSizeExpr());
+      auto CapturedTy = FI->getType();
+      auto LV = CGF.MakeNaturalAlignAddrLValue(Arg, CapturedTy);
+      Arg = CGF.EmitLoadOfScalar(LV, SourceLocation());
+    } else if (CI->capturesVariableByCopy()) {
+      CapturedVar = CI->getCapturedVar();
+    }
+
     // If this is a capture by value, we need to load the data. Additionally, if
     // its not a pointer we may need to cast it to uintptr.
     if (CI->capturesVariableByCopy()) {
-      auto *CapturedVar = CI->getCapturedVar();
       auto CapturedTy = FI->getType();
       auto LV = CGF.MakeNaturalAlignAddrLValue(Arg, CapturedTy);
 
@@ -3745,7 +3774,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
     ++FI;
   }
 
-  CGF.EmitCallOrInvoke(&OutlinedParallelFn, Args);
+  emitOutlinedFunctionCall(CGF, D.getLocStart(), &OutlinedParallelFn, Args);
   CGF.FinishFunction();
   return Fn;
 }
@@ -3937,8 +3966,7 @@ void CGOpenMPRuntimeNVPTX::emitGenericParallelCall(
         WorkSource, /*Volatile=*/false,
         Ctx.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/false),
         SourceLocation());
-    CGF.EmitCallOrInvoke(WFn,
-                         {Bld.getInt16(/*ParallelLevel=*/1), SourceThread});
+    emitCall(CGF, WFn, {Bld.getInt16(/*ParallelLevel=*/1), SourceThread});
     ArrayDecay = Bld.CreateConstInBoundsGEP2_32(
         llvm::ArrayType::get(CGM.Int8Ty, TASK_STATE_SIZE), TaskState,
         /*Idx0=*/0, /*Idx1=*/0);
@@ -3973,7 +4001,7 @@ void CGOpenMPRuntimeNVPTX::emitGenericParallelCall(
     OutlinedFnArgs.push_back(
         llvm::Constant::getNullValue(CGM.Int32Ty->getPointerTo()));
     OutlinedFnArgs.append(CapturedVars.begin(), CapturedVars.end());
-    CGF.EmitCallOrInvoke(Fn, OutlinedFnArgs);
+    emitOutlinedFunctionCall(CGF, Loc, Fn, OutlinedFnArgs);
 
     // __kmpc_end_serialized_parallel(&Loc, GTid);
     llvm::Value *EndArgs[] = {emitUpdateLocation(CGF, Loc), ThreadID};
@@ -4019,7 +4047,7 @@ void CGOpenMPRuntimeNVPTX::emitSPMDParallelCall(
     OutlinedFnArgs.push_back(ThreadIDAddr.getPointer());
     OutlinedFnArgs.push_back(ZeroAddr.getPointer());
     OutlinedFnArgs.append(CapturedVars.begin(), CapturedVars.end());
-    CGF.EmitCallOrInvoke(OutlinedFn, OutlinedFnArgs);
+    emitOutlinedFunctionCall(CGF, Loc, OutlinedFn, OutlinedFnArgs);
   } else {
     emitGenericParallelCall(CGF, Loc, OutlinedFn, CapturedVars, IfCond);
   }
@@ -4120,7 +4148,7 @@ void CGOpenMPRuntimeNVPTX::emitSimdCall(CodeGenFunction &CGF,
     OutlinedFnArgs.push_back(SourceThread);
     OutlinedFnArgs.push_back(LaneId.getPointer());
     OutlinedFnArgs.push_back(NumLanes.getPointer());
-    CGF.EmitCallOrInvoke(WFn, OutlinedFnArgs);
+    emitCall(CGF, WFn, OutlinedFnArgs);
     ArrayDecay = Bld.CreateConstInBoundsGEP2_32(
         llvm::ArrayType::get(CGM.Int8Ty, SIMD_STATE_SIZE), TaskState,
         /*Idx0=*/0, /*Idx1=*/0);
@@ -4138,7 +4166,8 @@ void CGOpenMPRuntimeNVPTX::emitSimdCall(CodeGenFunction &CGF,
     CGF.EmitBlock(DoEndBB);
   };
 
-  auto &&SeqGen = [Fn, &CapturedVars](CodeGenFunction &CGF, PrePostActionTy &) {
+  auto &&SeqGen = [Fn, &CapturedVars, Loc](CodeGenFunction &CGF,
+                                           PrePostActionTy &) {
     CGBuilderTy &Bld = CGF.Builder;
     Address LaneId =
         CGF.CreateTempAlloca(CGF.Int32Ty, CharUnits::fromQuantity(4),
@@ -4154,7 +4183,8 @@ void CGOpenMPRuntimeNVPTX::emitSimdCall(CodeGenFunction &CGF,
     OutlinedFnArgs.push_back(LaneId.getPointer());
     OutlinedFnArgs.push_back(NumLanes.getPointer());
     OutlinedFnArgs.append(CapturedVars.begin(), CapturedVars.end());
-    CGF.EmitCallOrInvoke(Fn, OutlinedFnArgs);
+    CGF.CGM.getOpenMPRuntime().emitOutlinedFunctionCall(CGF, Loc, Fn,
+                                                        OutlinedFnArgs);
   };
 
   CodeGenFunction::RunCleanupsScope Scope(CGF);
@@ -4427,7 +4457,7 @@ void CGOpenMPRuntimeNVPTX::emitTeamsCall(CodeGenFunction &CGF,
     OutlinedFnArgs.push_back(ThreadIDAddr.getPointer());
     OutlinedFnArgs.push_back(ZeroAddr.getPointer());
     OutlinedFnArgs.append(CapturedVars.begin(), CapturedVars.end());
-    CGF.EmitCallOrInvoke(OutlinedFn, OutlinedFnArgs);
+    emitOutlinedFunctionCall(CGF, Loc, OutlinedFn, OutlinedFnArgs);
   } else if (D.getDirectiveKind() == OMPD_teams_distribute ||
              D.getDirectiveKind() == OMPD_target_teams_distribute) {
     // This code generation is a duplication of the one in CGStmtOpenMP.cpp
@@ -5047,7 +5077,7 @@ static llvm::Value *CreateRuntimeShuffleFunction(CodeGenFunction &CGF,
   FnArgs.push_back(Offset);
   FnArgs.push_back(Bld.getInt16(DS_Max_Worker_Warp_Size));
 
-  return CGF.EmitCallOrInvoke(RTLFn, FnArgs).getInstruction();
+  return CGF.EmitRuntimeCall(RTLFn, FnArgs);
 }
 
 static void EmitDirectionSpecializedReduceDataCopy(
@@ -5913,13 +5943,6 @@ void CGOpenMPRuntimeNVPTX::emitReduction(
   if (!CGF.HaveInsertPoint())
     return;
 
-  if (SimpleReduction) {
-    CGOpenMPRuntime::emitReduction(CGF, Loc, Privates, LHSExprs, RHSExprs,
-                                   ReductionOps, WithNowait, SimpleReduction,
-                                   ReductionKind);
-    return;
-  }
-
   bool TeamsReduction = isOpenMPTeamsDirective(ReductionKind);
   bool ParallelReduction = isOpenMPParallelDirective(ReductionKind);
   bool SimdReduction = isOpenMPSimdDirective(ReductionKind);
@@ -6089,3 +6112,85 @@ void CGOpenMPRuntimeNVPTX::emitReduction(
   CGF.EmitBlock(DefaultBB, /*IsFinished=*/true);
 }
 
+const VarDecl *
+CGOpenMPRuntimeNVPTX::translateParameter(const FieldDecl *FD,
+                                         const VarDecl *NativeParam) const {
+  if (!NativeParam->getType()->isReferenceType())
+    return NativeParam;
+  QualType ArgType = NativeParam->getType();
+  QualifierCollector QC;
+  const Type *NonQualTy = QC.strip(ArgType);
+  QualType PointeeTy = cast<ReferenceType>(NonQualTy)->getPointeeType();
+  if (const auto *Attr = FD->getAttr<OMPCaptureKindAttr>()) {
+    if (Attr->getCaptureKind() == OMPC_map) {
+      PointeeTy = CGM.getContext().getAddrSpaceQualType(PointeeTy,
+                                                        LangAS::opencl_global);
+    }
+  }
+  ArgType = CGM.getContext().getPointerType(PointeeTy);
+  QC.addRestrict();
+  enum { NVPTX_local_addr = 5 };
+  QC.addAddressSpace(NVPTX_local_addr);
+  ArgType = QC.apply(CGM.getContext(), ArgType);
+  return ImplicitParamDecl::Create(
+      CGM.getContext(), /*DC=*/nullptr, NativeParam->getLocation(),
+      NativeParam->getIdentifier(), ArgType, ImplicitParamDecl::Other);
+}
+
+Address
+CGOpenMPRuntimeNVPTX::getParameterAddress(CodeGenFunction &CGF,
+                                          const VarDecl *NativeParam,
+                                          const VarDecl *TargetParam) const {
+  assert(NativeParam != TargetParam &&
+         NativeParam->getType()->isReferenceType() &&
+         "Native arg must not be the same as target arg.");
+  Address LocalAddr = CGF.GetAddrOfLocalVar(TargetParam);
+  QualType NativeParamType = NativeParam->getType();
+  QualifierCollector QC;
+  const Type *NonQualTy = QC.strip(NativeParamType);
+  QualType NativePointeeTy = cast<ReferenceType>(NonQualTy)->getPointeeType();
+  unsigned NativePointeeAddrSpace =
+      NativePointeeTy.getQualifiers().getAddressSpace();
+  QualType TargetPointeeTy = TargetParam->getType()->getPointeeType();
+  llvm::Value *TargetAddr = CGF.EmitLoadOfScalar(
+      LocalAddr, /*Volatile=*/false, TargetPointeeTy, SourceLocation());
+  // First cast to generic.
+  TargetAddr = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+      TargetAddr, TargetAddr->getType()->getPointerElementType()->getPointerTo(
+                      /*AddrSpace=*/0));
+  // Cast from generic to native address space.
+  TargetAddr = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+      TargetAddr, TargetAddr->getType()->getPointerElementType()->getPointerTo(
+                      NativePointeeAddrSpace));
+  Address NativeParamAddr = CGF.CreateMemTemp(NativeParamType);
+  CGF.EmitStoreOfScalar(TargetAddr, NativeParamAddr, /*Volatile=*/false,
+                        NativeParam->getType());
+  return NativeParamAddr;
+}
+
+void CGOpenMPRuntimeNVPTX::emitOutlinedFunctionCall(
+    CodeGenFunction &CGF, SourceLocation Loc, llvm::Value *OutlinedFn,
+    ArrayRef<llvm::Value *> Args) const {
+  SmallVector<llvm::Value *, 4> TargetArgs;
+  TargetArgs.reserve(Args.size());
+  auto *FnType =
+      cast<llvm::FunctionType>(OutlinedFn->getType()->getPointerElementType());
+  for (unsigned I = 0, E = Args.size(); I < E; ++I) {
+    if (FnType->isVarArg() && FnType->getNumParams() <= I) {
+      TargetArgs.append(std::next(Args.begin(), I), Args.end());
+      break;
+    }
+    llvm::Type *TargetType = FnType->getParamType(I);
+    llvm::Value *NativeArg = Args[I];
+    if (!TargetType->isPointerTy()) {
+      TargetArgs.emplace_back(NativeArg);
+      continue;
+    }
+    llvm::Value *TargetArg = CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
+        NativeArg, NativeArg->getType()->getPointerElementType()->getPointerTo(
+                       /*AddrSpace=*/0));
+    TargetArgs.emplace_back(
+        CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(TargetArg, TargetType));
+  }
+  CGOpenMPRuntime::emitOutlinedFunctionCall(CGF, Loc, OutlinedFn, TargetArgs);
+}
