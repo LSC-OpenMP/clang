@@ -447,9 +447,5 @@ CGAClangRuntime::cl_get_threads_blocks_reduction() {
 	 , "_cl_get_threads_blocks_reduction");
 }
 
-///
-/// Create an instance of AClang runtime for the OpenCL targets
-///
-CGAClangRuntime *CodeGen::CreateAClangRuntime(CodeGenModule &CGM) {
-    return new CGAClangRuntime(CGM);
-}
+
+CGAClangRuntime::CGAClangRuntime(CodeGenModule &CGM) : CGM(CGM) {}

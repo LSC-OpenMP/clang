@@ -11,11 +11,13 @@
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
 #include "TargetInfo.h"
+#include "CGAClangRuntime.h"
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtOpenMP.h"
 #include <sys/stat.h>
 #include <sstream>
+#include <fstream>
 
 using namespace clang;
 using namespace CodeGen;
@@ -48,7 +50,7 @@ bool pairCompare(const std::pair<int, std::string> &p1,
 }
 
 struct Required {
-  Required(std::string val) : val_(val) {}
+  explicit Required(std::string val) : val_(val) {}
 
   bool operator()(const std::pair<int, std::string> &elem) const {
     return val_ == elem.second;
@@ -238,8 +240,7 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
     // DeclRefExpr for a reference initialized by a constant expression
     const Expr *Init = VD->getAnyInitializer(VD);
     if (Init && !isa<ParmVarDecl>(VD) && VD->getType()->isReferenceType()) {
-        llvm::Constant *Val =
-                CGM.EmitConstantValue(*VD->evaluateValue(), VD->getType(), this);
+        llvm::Constant *Val = CGM.EmitConstantValue(*VD->evaluateValue(), VD->getType(), this);
         assert(Val && "failed to emit reference constant expression");
         /* FIX-ME: return (MakeAddrLValue(Val, T, Alignment)).getAddress(); */
     }
@@ -257,8 +258,8 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
         }
         else {
             bool isBlockVariable = VD->hasAttr<BlocksAttr>();
-            Address Vadd = LocalDeclMap.lookup(VD);
-            llvm::Value *V = Vadd.getPointer();
+            auto VDadd = LocalDeclMap.lookup(VD);
+            llvm::Value *V = VDadd.getPointer();
             if (!V && VD->isStaticLocal())
                 V = CGM.getStaticLocalDeclAddress(VD);
             if (!V) return nullptr;
@@ -266,7 +267,7 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
                 LValue LV;
                 /* FIX-ME: if (isBlockVariable) V = BuildBlockByrefAddress(V, VD); */
                 if (VD->getType()->isReferenceType()) {
-                    llvm::LoadInst *LI = Builder.CreateLoad(Vadd);
+                    llvm::LoadInst *LI = Builder.CreateLoad(VDadd);
                     LI->setAlignment(Alignment.getQuantity());
                     V = LI;
                     LV = MakeNaturalAlignAddrLValue(V, T);
@@ -485,7 +486,8 @@ llvm::Value *CodeGenFunction::EmitHostParameters(ForStmt *FS,
 
     llvm::AllocaInst *AL2 = Builder.CreateAlloca(B->getType(), NULL);
     AL2->setUsedWithInAlloca(true);
-    Builder.CreateStore(MIN, AL2);
+    Address AL2add =  Address(AL2->getOperand(0), CharUnits::fromQuantity(AL2->getAlignment()));
+    Builder.CreateStore(MIN, AL2add);
     llvm::Value *CVRef2 = Builder.CreateBitCast(AL2, CGM.VoidPtrTy);
 
     // Create hostArg to represent _MIN_n
@@ -503,8 +505,9 @@ llvm::Value *CodeGenFunction::EmitHostParameters(ForStmt *FS,
       FOS << ",\n";
 
     llvm::AllocaInst *AL3 = Builder.CreateAlloca(C->getType(), NULL);
-    AL2->setUsedWithInAlloca(true);
-    Builder.CreateStore(C, AL3);
+    AL3->setUsedWithInAlloca(true);
+    Address AL3add =  Address(AL3->getOperand(0), CharUnits::fromQuantity(AL3->getAlignment()));
+    Builder.CreateStore(C, AL3add);
     llvm::Value *CVRef3 = Builder.CreateBitCast(AL3, CGM.VoidPtrTy);
 
     // Create hostArg to represent _INC_n
@@ -586,8 +589,8 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
   const std::string clName = FileName + ".cl";
   const std::string AuxName = FileName + ".tmp";
 
-  std::string Error;
-  llvm::raw_fd_ostream AXOS(AuxName.c_str(), Error, llvm::sys::fs::F_Text);
+  std::error_code EC;
+  llvm::raw_fd_ostream AXOS(AuxName.c_str(), EC, llvm::sys::fs::F_Text);
 
   // Add the basic c header files.
   CLOS << "#include <stdlib.h>\n";
@@ -751,7 +754,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
          I != E; ++I) {
 
       llvm::Value *PV = dyn_cast<llvm::User>(*I)->getOperand(0);
-      pName.push_back(std::pair<int, std::string>(k, vectorMap[PV]));
+      pName.emplace_back(std::pair<int, std::string>(k, vectorMap[PV]));
       k++;
     }
     std::sort(pName.begin(), pName.end(), pairCompare);
@@ -844,10 +847,10 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
         }
         argFile >> kind >> index >> arg_name;
         if (kind == 1) {
-          vectorNames[kernelId].push_back(
+          vectorNames[kernelId].emplace_back(
               std::pair<int, std::string>(index, arg_name));
         } else if (kind == 2) {
-          scalarNames[kernelId].push_back(
+          scalarNames[kernelId].emplace_back(
               std::pair<int, std::string>(index, arg_name));
         } else
           assert(false && "Invalid kernel structure");
@@ -1159,11 +1162,14 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
       llvm::Value *rv = EmitLValue(*l).getAddress().getPointer();
 
       QualType qt = getContext().IntTy;
+      CharUnits Alignment = getContext().getAlignOfGlobalVarInChars(qt);
       llvm::Type *TT1 = ConvertType(qt);
       llvm::Value *T1 = CreateTempAlloca(TT1, "nthreads");
+      Address T1add = Address(T1, Alignment);
 
       llvm::Type *BB1 = ConvertType(qt);
       llvm::Value *B1 = CreateTempAlloca(BB1, "nblocks");
+      Address B1add = Address(B1, Alignment);
 
       ArrayRef<llvm::Value *> MapClausePointerValues;
       ArrayRef<llvm::Value *> MapClauseSizeValues;
@@ -1202,22 +1208,23 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
       ThreadBytes = EmitRuntimeCall(RT.cl_get_threads_blocks_reduction(), KArg);
 
       /* Offload the Auxiliary array */
-      llvm::Value *Size[] = {
-          Builder.CreateIntCast(ThreadBytes, CGM.Int64Ty, false)};
-      Status =
-          EmitRuntimeCall(RT.cl_create_read_write(), Size);
+      llvm::Value *Size[] = { Builder.CreateIntCast(ThreadBytes, CGM.Int64Ty, false) };
+      Status = EmitRuntimeCall(RT.cl_create_read_write(), Size);
 
       /* Offload of answer variable*/
       llvm::Value *Size2[] = {Builder.CreateIntCast(Bytes, CGM.Int64Ty, false)};
       Status = EmitRuntimeCall(RT.cl_create_read_write(), Size2);
 
-      /*Fetch the scan variable type and its operator */
-      const std::string reductionVarType =
-          reductionVar->getType().getAsString();
+      /*Fetch the reduction variable type and its operator */
+      const std::string reductionVarType = reductionVar->getType().getAsString();
+
+      const std::string operatorName;
+      /* FIX-ME: for (auto *E : C->reduction_ops())  {
       OpenMPReductionClauseOperator op =
-          cast<OMPReductionClause>(*C)->getOperator();
+          cast<OMPReductionClause>(*C).getOperator();
       const std::string operatorName =
           cast<OMPReductionClause>(*C)->getOpName().getAsString();
+      */
 
       /* Create the unique filename that refers to kernel file */
       llvm::raw_fd_ostream CLOS(CGM.OpenMPSupport.createTempFile(), true);
@@ -1235,6 +1242,7 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
       }
 
       std::string initializer;
+      /* FIX-ME
       switch (op) {
       case OMPC_REDUCTION_add:
         initializer = "0";
@@ -1245,6 +1253,8 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
       default:
         initializer = "";
       }
+      */
+
       if (initializer.empty()) {
         // custom initializer is already inserted in include file
         templateId = 1; /* signal user-defined operation */
@@ -1269,11 +1279,9 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
 
       /* Generate code for calling the 1st kernel */
       llvm::Value *Args[] = {Builder.getInt32(0), Builder.getInt32(idxInput)};
-      Status =
-          EmitRuntimeCall(RT.cl_set_kernel_arg(), Args);
+      Status = EmitRuntimeCall(RT.cl_set_kernel_arg(), Args);
       llvm::Value *Args2[] = {Builder.getInt32(1), Builder.getInt32(idxAux)};
-      Status =
-          EmitRuntimeCall(RT.cl_set_kernel_arg(), Args2);
+      Status = EmitRuntimeCall(RT.cl_set_kernel_arg(), Args2);
       llvm::Value *BVReduction = Builder.CreateBitCast(T1, CGM.VoidPtrTy);
       llvm::Value *CArgReduction[] = {
           Builder.getInt32(2),
@@ -1283,8 +1291,8 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
           BVReduction};
       Status = EmitRuntimeCall(RT.cl_set_kernel_hostArg(), CArgReduction);
 
-      llvm::Value *LB = Builder.CreateLoad(B1);
-      llvm::Value *LST = Builder.CreateLoad(T1);
+      llvm::Value *LB = Builder.CreateLoad(B1add);
+      llvm::Value *LST = Builder.CreateLoad(T1add);
       llvm::Value *GroupSize[] = {
           Builder.CreateIntCast(LB, CGM.Int32Ty, false),
           Builder.getInt32(0),
@@ -1314,7 +1322,7 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
           BVReduction2};
       Status = EmitRuntimeCall(RT.cl_set_kernel_hostArg(), CArgReduction2);
 
-      llvm::Value *LSB = Builder.CreateLoad(B1);
+      llvm::Value *LSB = Builder.CreateLoad(B1add);
       llvm::Value *GroupSize2[] = {
           Builder.getInt32(1), Builder.getInt32(0),
           Builder.getInt32(0), Builder.CreateIntCast(LSB, CGM.Int32Ty, false),

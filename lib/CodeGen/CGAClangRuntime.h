@@ -108,8 +108,8 @@ public:
     AClangRTL_cl_get_threads_blocks_reduction
   };
   
-  CGAClangRuntime(CodeGenModule &CGM) : CGM(CGM) {}
-  ~CGAClangRuntime() {}
+  explicit CGAClangRuntime(CodeGenModule &CGM);
+  virtual ~CGAClangRuntime() {};
 
   /// \brief Returns specified AClang runtime function.
   /// \param Function AClangRTL function.
