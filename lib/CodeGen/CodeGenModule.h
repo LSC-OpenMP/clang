@@ -1216,9 +1216,6 @@ public:
             llvm::SmallVector<llvm::Value*,16> MapPointers;
             llvm::SmallVector<llvm::Value*,16> MapSizes;
             llvm::SmallVector<QualType,16> MapQualTypes;
-            llvm::SmallVector<unsigned,16> MapTypes;
-            llvm::SmallVector<unsigned,16> MapPositions;
-            llvm::SmallVector<unsigned, 16> MapScopes;
             llvm::SmallVector<llvm::Value*,16> KernelVars;
             llvm::SmallVector<QualType, 16> KernelTypes;
             llvm::SmallVector<llvm::Value*,16> LocalVars;
@@ -1245,29 +1242,13 @@ public:
             OpenMPStack.pop_back();
         }
 
-        void getMapData(ArrayRef<llvm::Value*> &MapPointers,
-                        ArrayRef<llvm::Value*> &MapSizes,
-                        ArrayRef<QualType> &MapQualTypes,
-                        ArrayRef<unsigned> &MapTypes);
-
-        void addMapData(llvm::Value *MapPointer,
-                        llvm::Value *MapSize,
-                        QualType MapQualType,
-                        unsigned MapType);
-
         void getMapPos(ArrayRef<llvm::Value*> &MapPointers,
                        ArrayRef<llvm::Value*> &MapSizes,
-                       ArrayRef<QualType> &MapQualTypes,
-                       ArrayRef<unsigned> &MapTypes,
-                       ArrayRef<unsigned> &MapPositions,
-                       ArrayRef<unsigned> &MapScopes);
+                       ArrayRef<QualType> &MapQualTypes);
 
         void addMapPos(llvm::Value *MapPointer,
                        llvm::Value *MapSize,
-                       QualType MapQualType,
-                       unsigned MapType,
-                       unsigned MapPosition,
-                       unsigned MapScope);
+                       QualType MapQualType);
 
         unsigned long getMapSize() {
             return OpenMPStack.back().MapPointers.size();

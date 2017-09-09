@@ -2809,7 +2809,7 @@ public:
 
   llvm::Value *EmitHostParameters(ForStmt *FS,
                                   llvm::raw_fd_ostream &FOS,
-                                  int &num_args,
+                                  unsigned &num_args,
                                   bool Collapse,
                                   unsigned loopNest,
                                   unsigned lastLoop);
@@ -2818,7 +2818,7 @@ public:
 
   void HandleStmts(Stmt *ST,
                    llvm::raw_fd_ostream &CLOS,
-                   unsigned long &num_args,
+                   unsigned &num_args,
                    bool CLgen);
 
   /* oicram */

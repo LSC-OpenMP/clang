@@ -2237,11 +2237,11 @@ namespace {
 bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
   /* marcio */
   if (CGM.getTriple().isOpenCL() || CGM.getTriple().isSPIR()) {
-      for (const auto *C : S.getClausesOfKind<OMPReductionClause>()) {
+      if (auto *C = S.getSingleClause<OMPReductionClause>()) {
           CodeGenFunction::EmitOMPReductionAsCLKernel(S);
-          return false;
+      } else {
+          CodeGenFunction::EmitOMPLoopAsCLKernel(S);
       }
-      CodeGenFunction::EmitOMPLoopAsCLKernel(S);
       return false;
   }
   /* oicram */

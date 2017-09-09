@@ -14,6 +14,9 @@
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/Stmt.h"
 #include "clang/AST/StmtOpenMP.h"
+#include <sys/stat.h>
+#include <sstream>
+
 using namespace clang;
 using namespace CodeGen;
 
@@ -29,7 +32,7 @@ std::map<std::string, llvm::Value *> scalarMap;
 
 llvm::SmallVector<QualType, 16> deftypes;
 
-static bool dumpedDefType(const QualType *T) {
+bool dumpedDefType(const QualType *T) {
   for (ArrayRef<QualType>::iterator I = deftypes.begin(), E = deftypes.end();
        I != E; ++I) {
     if ((*I).getAsString() == T->getAsString())
@@ -39,7 +42,7 @@ static bool dumpedDefType(const QualType *T) {
   return false;
 }
 
-static bool pairCompare(const std::pair<int, std::string> &p1,
+bool pairCompare(const std::pair<int, std::string> &p1,
                         const std::pair<int, std::string> &p2) {
   return p1.second < p2.second;
 }
@@ -105,52 +108,20 @@ llvm::Type *getVarType(llvm::Value *FV) {
   return LTy;
 }
 
-void CodeGenModule::OpenMPSupportStackTy::getMapData(ArrayRef<llvm::Value*> &MapPointers,
-                                                     ArrayRef<llvm::Value*> &MapSizes,
-                                                     ArrayRef<QualType> &MapQualTypes,
-                                                     ArrayRef<unsigned> &MapTypes){
-    MapPointers = OpenMPStack.back().MapPointers;
-    MapSizes = OpenMPStack.back().MapSizes;
-    MapQualTypes = OpenMPStack.back().MapQualTypes;
-    MapTypes = OpenMPStack.back().MapTypes;
-}
-
-void CodeGenModule::OpenMPSupportStackTy::addMapData(llvm::Value *MapPointer,
-                                                     llvm::Value *MapSize,
-                                                     QualType MapQualType,
-                                                     unsigned MapType){
-    OpenMPStack.back().MapPointers.push_back(MapPointer);
-    OpenMPStack.back().MapSizes.push_back(MapSize);
-    OpenMPStack.back().MapQualTypes.push_back(MapQualType);
-    OpenMPStack.back().MapTypes.push_back(MapType);
-}
-
 void CodeGenModule::OpenMPSupportStackTy::getMapPos(ArrayRef<llvm::Value*> &MapPointers,
                                                     ArrayRef<llvm::Value*> &MapSizes,
-                                                    ArrayRef<QualType> &MapQualTypes,
-                                                    ArrayRef<unsigned> &MapTypes,
-                                                    ArrayRef<unsigned> &MapPositions,
-                                                    ArrayRef<unsigned> &MapScopes) {
+                                                    ArrayRef<QualType> &MapQualTypes) {
     MapPointers = OpenMPStack.back().MapPointers;
     MapSizes = OpenMPStack.back().MapSizes;
     MapQualTypes = OpenMPStack.back().MapQualTypes;
-    MapTypes = OpenMPStack.back().MapTypes;
-    MapPositions = OpenMPStack.back().MapPositions;
-    MapScopes = OpenMPStack.back().MapScopes;
 }
 
 void CodeGenModule::OpenMPSupportStackTy::addMapPos(llvm::Value *MapPointer,
                                                     llvm::Value *MapSize,
-                                                    QualType MapQualType,
-                                                    unsigned MapType,
-                                                    unsigned MapPosition,
-                                                    unsigned MapScope) {
+                                                    QualType MapQualType) {
     OpenMPStack.back().MapPointers.push_back(MapPointer);
     OpenMPStack.back().MapSizes.push_back(MapSize);
     OpenMPStack.back().MapQualTypes.push_back(MapQualType);
-    OpenMPStack.back().MapTypes.push_back(MapType);
-    OpenMPStack.back().MapPositions.push_back(MapPosition);
-    OpenMPStack.back().MapScopes.push_back(MapScope);
 }
 
 bool CodeGenModule::OpenMPSupportStackTy::isKernelVar(llvm::Value *KernelVar) {
@@ -199,9 +170,6 @@ void CodeGenModule::OpenMPSupportStackTy::InheritMapPos() {
             OpenMPStack.back().MapPointers.push_back(IS->MapPointers[i]);
             OpenMPStack.back().MapSizes.push_back(IS->MapSizes[i]);
             OpenMPStack.back().MapQualTypes.push_back(IS->MapQualTypes[i]);
-            OpenMPStack.back().MapTypes.push_back(IS->MapTypes[i]);
-            OpenMPStack.back().MapPositions.push_back(IS->MapPositions[i]);
-            OpenMPStack.back().MapScopes.push_back(IS->MapScopes[i]);
             i++;
         }
     }
@@ -249,7 +217,6 @@ bool CodeGenModule::OpenMPSupportStackTy::inLocalScope(llvm::Value *LocalVar) {
     return false;
 }
 
-
 ///
 /// Emit Decl Ref LValues to construct Spir Functions
 ///
@@ -265,7 +232,7 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
     // check if global Named registers accessed via intrinsics only
     if (VD->getStorageClass() == SC_Register &&
         VD->hasAttr<AsmLabelAttr>() && !VD->isLocalVarDecl()) {
-        return (EmitGlobalNamedRegister(VD, CGM, Alignment)).getAddress();
+        /* FIX-ME: return (EmitGlobalNamedRegister(VD, CGM, Alignment)).getAddress(); */
     }
 
     // DeclRefExpr for a reference initialized by a constant expression
@@ -274,31 +241,32 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
         llvm::Constant *Val =
                 CGM.EmitConstantValue(*VD->evaluateValue(), VD->getType(), this);
         assert(Val && "failed to emit reference constant expression");
-        return (MakeAddrLValue(Val, T, Alignment)).getAddress();
+        /* FIX-ME: return (MakeAddrLValue(Val, T, Alignment)).getAddress(); */
     }
 
     if (ND->hasAttr<WeakRefAttr>()) {
         const auto *VD = cast<ValueDecl>(ND);
-        llvm::Constant *Aliasee = CGM.GetWeakRefReference(VD);
-        return (MakeAddrLValue(Aliasee, T, Alignment)).getAddress();
+        llvm::Constant *Aliasee = CGM.GetWeakRefReference(VD).getPointer();
+        return (MakeAddrLValue(Aliasee, T, Alignment)).getAddress().getPointer();
     }
 
     if (const auto *VD = dyn_cast<VarDecl>(ND)) {
         // Check if this is a global variable.
         if (VD->hasLinkage() || VD->isStaticDataMember()) {
-            return (EmitGlobalVarDeclLValue(*this, D, VD)).getAddress();
+            /* FIX-ME: return (EmitGlobalVarDeclLValue(*this, D, VD)).getAddress(); */
         }
         else {
             bool isBlockVariable = VD->hasAttr<BlocksAttr>();
-            llvm::Value *V = LocalDeclMap.lookup(VD);
+            Address Vadd = LocalDeclMap.lookup(VD);
+            llvm::Value *V = Vadd.getPointer();
             if (!V && VD->isStaticLocal())
                 V = CGM.getStaticLocalDeclAddress(VD);
             if (!V) return nullptr;
             else {
                 LValue LV;
-                if (isBlockVariable) V = BuildBlockByrefAddress(V, VD);
+                /* FIX-ME: if (isBlockVariable) V = BuildBlockByrefAddress(V, VD); */
                 if (VD->getType()->isReferenceType()) {
-                    llvm::LoadInst *LI = Builder.CreateLoad(V);
+                    llvm::LoadInst *LI = Builder.CreateLoad(Vadd);
                     LI->setAlignment(Alignment.getQuantity());
                     V = LI;
                     LV = MakeNaturalAlignAddrLValue(V, T);
@@ -315,8 +283,8 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
                 }
                 bool isImpreciseLifetime = (isLocalStorage && !VD->hasAttr<ObjCPreciseLifetimeAttr>());
                 if (isImpreciseLifetime) LV.setARCPreciseLifetime(ARCImpreciseLifetime);
-                setObjCGCLValueClass(getContext(), D, LV);
-                return LV.getAddress();
+                /* FIX-ME: setObjCGCLValueClass(getContext(), D, LV); */
+                return LV.getAddress().getPointer();
             }
             return nullptr;
         }
@@ -329,7 +297,7 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
 ///
 void CodeGenFunction::HandleStmts(Stmt *ST,
                                   llvm::raw_fd_ostream &FOS,
-                                  unsigned long &num_args,
+                                  unsigned &num_args,
                                   bool CLgen) {
   llvm::Value *Status = nullptr;
   if (isa<DeclRefExpr>(ST)) {
@@ -369,7 +337,7 @@ void CodeGenFunction::HandleStmts(Stmt *ST,
   // recursively
   for (Stmt::child_iterator I = ST->child_begin(), E = ST->child_end(); I != E;
        ++I) {
-    if (*I != NULL)
+    if (*I != nullptr)
       HandleStmts(*I, FOS, num_args, CLgen);
   }
 }
@@ -379,7 +347,7 @@ void CodeGenFunction::HandleStmts(Stmt *ST,
 ///
 llvm::Value *CodeGenFunction::EmitHostParameters(ForStmt *FS,
                                                  llvm::raw_fd_ostream &FOS,
-                                                 unsigned long &num_args,
+                                                 unsigned &num_args,
                                                  bool Collapse,
                                                  unsigned loopNest,
                                                  unsigned lastLoop) {
@@ -402,7 +370,7 @@ llvm::Value *CodeGenFunction::EmitHostParameters(ForStmt *FS,
     return nullptr;
   } else {
     const BinaryOperator *INIT = dyn_cast<BinaryOperator>(FS->getInit());
-    IVal = EmitLValue(dyn_cast<Expr>(INIT)).getAddress();
+    IVal = EmitLValue(dyn_cast<Expr>(INIT)).getAddress().getPointer();
     init = INIT->getRHS();
     initType = INIT->getType().getAsString();
     CGM.OpenMPSupport.addLocalVar(IVal);
@@ -410,7 +378,7 @@ llvm::Value *CodeGenFunction::EmitHostParameters(ForStmt *FS,
   }
 
   // Check the comparator (<, <=, > or >=)
-  BinaryOperator *COND = dyn_cast<BinaryOperator>(FS->getCond());
+  auto *COND = dyn_cast<BinaryOperator>(FS->getCond());
   switch (COND->getOpcode()) {
   case BO_LT:
     isLesser = true;
@@ -484,7 +452,7 @@ llvm::Value *CodeGenFunction::EmitHostParameters(ForStmt *FS,
   }
 
   std::string IName = getVarNameAsString(IVal);
-  llvm::AllocaInst *AL = Builder.CreateAlloca(B->getType(), NULL);
+  llvm::AllocaInst *AL = Builder.CreateAlloca(B->getType(), nullptr);
   AL->setUsedWithInAlloca(true);
 
   llvm::Value *T;
@@ -496,9 +464,9 @@ llvm::Value *CodeGenFunction::EmitHostParameters(ForStmt *FS,
   auto &RT = CGM.getAClangRuntime();
 
   llvm::Value *KArg[] = {A, B, C, T};
-  llvm::Value *nCores =
-      EmitRuntimeCall(RT.Get_num_cores(), KArg);
-  Builder.CreateStore(nCores, AL);
+  llvm::Value *nCores = EmitRuntimeCall(RT.Get_num_cores(), KArg);
+  Address ALadd =  Address(AL->getOperand(0), CharUnits::fromQuantity(AL->getAlignment()));
+  Builder.CreateStore(nCores, ALadd);
 
   // Create hostArg to represent _UB_n (i.e., nCores)
   llvm::Value *CVRef = Builder.CreateBitCast(AL, CGM.VoidPtrTy);
@@ -595,9 +563,7 @@ unsigned CodeGenFunction::GetNumNestedLoops(const OMPExecutableDirective &S) {
 
 void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
 
-  /* marcio */
   llvm::errs() << "EmitOMPLoopAsCLKernel\n";
-  /* oicram */
 
   bool verbose = true;  /* change to false on release */
   bool tile = true;
@@ -632,20 +598,17 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
   AXOS << "#pragma OPENCL EXTENSION cl_khr_fp64 : enable\n";
 
   std::string includeContents = CGM.OpenMPSupport.getIncludeStr();
-  if (includeContents != "") {
+  if (!includeContents.empty()) {
     AXOS << includeContents << "\n";
   }
 
   ArrayRef<llvm::Value *> MapClausePointerValues;
   ArrayRef<llvm::Value *> MapClauseSizeValues;
   ArrayRef<QualType> MapClauseQualTypes;
-  ArrayRef<unsigned> MapClauseTypeValues;
-  ArrayRef<unsigned> MapClausePositionValues;
-  ArrayRef<unsigned> MapClauseScopeValues;
 
-  CGM.OpenMPSupport.getMapPos(MapClausePointerValues, MapClauseSizeValues,
-                              MapClauseQualTypes, MapClauseTypeValues,
-                              MapClausePositionValues, MapClauseScopeValues);
+  CGM.OpenMPSupport.getMapPos(MapClausePointerValues,
+                              MapClauseSizeValues,
+                              MapClauseQualTypes);
 
   // Dump necessary typedefs in scope file (and also in aux file)
   deftypes.clear();
@@ -676,7 +639,6 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
         if (isa<RecordType>(ty)) {
           const auto *RT = dyn_cast<RecordType>(ty);
           RecordDecl *RD = RT->getDecl()->getDefinition();
-          // Need to check if RecordDecl was already dumped?
           RD->print(CLOS);
           CLOS << ";\n";
           RD->print(AXOS);
@@ -744,7 +706,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
   }
   CLOS << ") {\n";
 
-  unsigned long num_args = CGM.OpenMPSupport.getKernelVarSize();
+  unsigned num_args = (unsigned) CGM.OpenMPSupport.getKernelVarSize();
   assert (num_args != 0 && "loop is not suitable to execute on GPUs");
 
   // Traverse the Body looking for all scalar variables declared out of
@@ -816,7 +778,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
          I != E; ++I) {
       OpenMPClauseKind ckind = ((*I)->getClauseKind());
       if (ckind == OMPC_schedule) {
-        OMPScheduleClause *C = cast<OMPScheduleClause>(*I);
+        auto *C = cast<OMPScheduleClause>(*I);
         OpenMPScheduleClauseKind ScheduleKind = C->getScheduleKind();
         if (ScheduleKind == OMPC_SCHEDULE_static ||
             ScheduleKind == OMPC_SCHEDULE_dynamic) {
@@ -903,8 +865,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
   // Emit code to load the file that contain the kernels
   llvm::Value *Status = nullptr;
   llvm::Value *FileStr = Builder.CreateGlobalStringPtr(FileName);
-  Status =
-      EmitRuntimeCall(RT.cl_create_program(), FileStr);
+  Status = EmitRuntimeCall(RT.cl_create_program(), FileStr);
 
   // CLgen control whether we need to generate the default kernel code.
   // The polyhedral optimization returns workSizes = 0, meaning that
@@ -921,7 +882,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
                I = scalarNames[kernelId].begin(),
                E = scalarNames[kernelId].end();
            I != E; ++I) {
-        if (scalarMap[(I)->second] == NULL) {
+        if (scalarMap[(I)->second] == nullptr) {
           CLgen = true;
           break;
         }
@@ -930,14 +891,12 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
   }
 
   if (CLgen) {
-    Status =
-        EmitRuntimeCall(RT.cl_create_kernel(), FileStr);
+    Status = EmitRuntimeCall(RT.cl_create_kernel(), FileStr);
     // Get the number of cl_mem args that will be passed first to
     // kernel_function
-    int num_args = CGM.OpenMPSupport.getKernelVarSize();
-    llvm::Value *Args[] = {Builder.getInt32(num_args)};
-    Status =
-        EmitRuntimeCall(RT.cl_set_kernel_args(), Args);
+    unsigned var_args = (unsigned) CGM.OpenMPSupport.getKernelVarSize();
+    llvm::Value *Args[] = {Builder.getInt32(var_args)};
+    Status = EmitRuntimeCall(RT.cl_set_kernel_args(), Args);
   }
 
   // Look for CollapseNum
@@ -950,7 +909,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
     OpenMPClauseKind ckind = ((*I)->getClauseKind());
     if (ckind == OMPC_collapse) {
       hasCollapseClause = true;
-      CollapseNum = getCollapsedNumberFromLoopDirective(&S);
+      /* FIX-ME: CollapseNum = getCollapsedNumberFromLoopDirective(&S); */
     }
   }
 
@@ -966,7 +925,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
 
   // Initialize Body to traverse it again, now for AXOS.
   Body = S.getAssociatedStmt();
-  if (CapturedStmt *CS = dyn_cast_or_null<CapturedStmt>(Body)) {
+  if (auto *CS = dyn_cast_or_null<CapturedStmt>(Body)) {
     Body = CS->getCapturedStmt();
   }
 
@@ -977,14 +936,13 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
     while (nLoops > 0) {
       For = dyn_cast<ForStmt>(Body);
       if (For) {
-        nCores.push_back(EmitHostParameters(For, AXOS, num_args, true, loop,
-                                            CollapseNum - 1));
+        nCores.push_back(EmitHostParameters(For, AXOS, num_args, true, loop, CollapseNum - 1));
         Body = For->getBody();
         --nLoops;
         loop++;
-      } else if (AttributedStmt *AS = dyn_cast<AttributedStmt>(Body)) {
+      } else if (auto *AS = dyn_cast<AttributedStmt>(Body)) {
         Body = AS->getSubStmt();
-      } else if (CompoundStmt *CS = dyn_cast<CompoundStmt>(Body)) {
+      } else if (auto *CS = dyn_cast<CompoundStmt>(Body)) {
         if (CS->size() == 1) {
           Body = CS->body_back();
         } else {
@@ -1001,14 +959,14 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
       Stmt *Aux = Body;
       while (loopNest > CollapseNum) {
         For = dyn_cast<ForStmt>(Aux);
-        int loop = loopNest - 1;
+        unsigned curloop = loopNest - 1;
         if (For) {
           AXOS << ",\n";
-          EmitHostParameters(For, AXOS, num_args, false, loop, CollapseNum - 1);
+          EmitHostParameters(For, AXOS, num_args, false, curloop, CollapseNum - 1);
           Aux = For->getBody();
           --loopNest;
-          loop--;
-        } else if (CompoundStmt *CS = dyn_cast<CompoundStmt>(Aux)) {
+          curloop--;
+        } else if (auto *CS = dyn_cast<CompoundStmt>(Aux)) {
           if (CS->size() == 1) {
             Aux = CS->body_back();
           } else {
@@ -1021,7 +979,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
     // Traverse again the Body looking for scalar variables declared out of
     // "for" scope and generate value reference to pass to kernel function
     if (Body->getStmtClass() == Stmt::CompoundStmtClass) {
-      CompoundStmt *BS = cast<CompoundStmt>(Body);
+      auto *BS = cast<CompoundStmt>(Body);
       for (CompoundStmt::body_iterator I = BS->body_begin(), E = BS->body_end();
            I != E; ++I) {
         HandleStmts(*I, AXOS, num_args, true);
@@ -1096,19 +1054,9 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
   }
 
   // Generate the spir-code ?
-  llvm::Triple Tgt = CGM.getLangOpts().OMPtoGPUTriple;
-  if (Tgt.getArch() == llvm::Triple::spir ||
-      Tgt.getArch() == llvm::Triple::spir64 ||
-      Tgt.getArch() == llvm::Triple::spirv) {
-
+  if (CGM.getTriple().isSPIR()) {
     std::string tgtStr;
-    if (Tgt.getArch() == llvm::Triple::spirv) {
-      // First Generate code for spir64
-      tgtStr = "spir64-unknown-unknown";
-    } else {
-      tgtStr = Tgt.getTriple();
-    }
-
+    tgtStr = CGM.getTriple().str();
     const std::string bcArg = "clang-3.5 -cc1 -x cl -cl-std=CL1.2 -fno-builtin "
                               "-emit-llvm-bc -triple " +
                               tgtStr +
@@ -1118,28 +1066,16 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
                               AuxName + " " + clName;
     std::system(bcArg.c_str());
 
-    const std::string encodeStr =
-        "spir-encoder " + AuxName + " " + FileName + ".bc";
+    const std::string encodeStr = "spir-encoder " + AuxName + " " + FileName + ".bc";
     std::system(encodeStr.c_str());
     std::remove(AuxName.c_str());
-
-    if (Tgt.getArch() == llvm::Triple::spirv) {
-      // Now convert to spir-v format
-      const std::string spirvStr = "llvm-spirv " + FileName + ".bc";
-      std::system(spirvStr.c_str());
-      if (!verbose) {
-        const std::string rmbc = "rm " + FileName + ".bc";
-        std::system(rmbc.c_str());
-      }
-    }
   }
 
   if (!CLgen) {
     for (kernelId = 0; kernelId <= upperKernel; kernelId++) {
       llvm::Value *KernelStr =
           Builder.CreateGlobalStringPtr(FileName + std::to_string(kernelId));
-      Status = EmitRuntimeCall(RT.cl_create_kernel(),
-                               KernelStr);
+      Status = EmitRuntimeCall(RT.cl_create_kernel(), KernelStr);
 
       // Set kernel args according pos & index of buffer, only if required
       k = 0;
@@ -1154,8 +1090,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
         } else {
           llvm::Value *Args[] = {Builder.getInt32(k),
                                  Builder.getInt32((I)->first)};
-          Status = EmitRuntimeCall(RT.cl_set_kernel_arg(),
-                                   Args);
+          Status = EmitRuntimeCall(RT.cl_set_kernel_arg(), Args);
           k++;
         }
       }
@@ -1167,7 +1102,7 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
         llvm::Value *BV = scalarMap[(I)->second];
         llvm::Value *BVRef = Builder.CreateBitCast(BV, CGM.VoidPtrTy);
         llvm::Value *CArg[] = {
-            Builder.getInt32((I)->first),
+            Builder.getInt32((int) (I)->first),
             Builder.getInt32(
                 (dyn_cast<llvm::AllocaInst>(BV)->getAllocatedType())
                     ->getPrimitiveSizeInBits() /
@@ -1211,18 +1146,17 @@ void CodeGenFunction::EmitOMPLoopAsCLKernel(const OMPLoopDirective &S) {
   }
 }
 
+///
 /// Generate an instructions for '#pragma omp parallel for [simd] reduction'
 /// directive
 void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
 
-  for (const auto *C : S.getClausesOfKind<OMPReductionClause>()) {
-    OMPVarListClause<OMPReductionClause> *list =
-        cast<OMPVarListClause<OMPReductionClause>>(
-            cast<OMPReductionClause>(*I));
+    auto *C = S.getSingleClause<OMPReductionClause>();
+    auto *list = cast<OMPVarListClause<OMPReductionClause>>(C);
     for (auto l = list->varlist_begin(); l != list->varlist_end(); l++) {
 
-      DeclRefExpr *reductionVar = cast<DeclRefExpr>(*l);
-      llvm::Value *rv = EmitLValue(*l).getAddress();
+      const auto *reductionVar = cast<DeclRefExpr>(*l);
+      llvm::Value *rv = EmitLValue(*l).getAddress().getPointer();
 
       QualType qt = getContext().IntTy;
       llvm::Type *TT1 = ConvertType(qt);
@@ -1234,13 +1168,10 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
       ArrayRef<llvm::Value *> MapClausePointerValues;
       ArrayRef<llvm::Value *> MapClauseSizeValues;
       ArrayRef<QualType> MapClauseQualTypes;
-      ArrayRef<unsigned> MapClauseTypeValues;
-      ArrayRef<unsigned> MapClausePositionValues;
-      ArrayRef<unsigned> MapClauseScopeValues;
 
-      CGM.OpenMPSupport.getMapPos(
-          MapClausePointerValues, MapClauseSizeValues, MapClauseQualTypes,
-          MapClauseTypeValues, MapClausePositionValues, MapClauseScopeValues);
+      CGM.OpenMPSupport.getMapPos(MapClausePointerValues,
+                                  MapClauseSizeValues,
+                                  MapClauseQualTypes);
 
       int idxInput = 0, idxAux = 1, idxOut = 2, templateId = 1;
       QualType Q = MapClauseQualTypes[idxInput];
@@ -1278,16 +1209,15 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
 
       /* Offload of answer variable*/
       llvm::Value *Size2[] = {Builder.CreateIntCast(Bytes, CGM.Int64Ty, false)};
-      Status = EmitRuntimeCall(RT.cl_create_read_write(),
-                               Size2);
+      Status = EmitRuntimeCall(RT.cl_create_read_write(), Size2);
 
       /*Fetch the scan variable type and its operator */
       const std::string reductionVarType =
           reductionVar->getType().getAsString();
       OpenMPReductionClauseOperator op =
-          cast<OMPReductionClause>(*I)->getOperator();
+          cast<OMPReductionClause>(*C)->getOperator();
       const std::string operatorName =
-          cast<OMPReductionClause>(*I)->getOpName().getAsString();
+          cast<OMPReductionClause>(*C)->getOpName().getAsString();
 
       /* Create the unique filename that refers to kernel file */
       llvm::raw_fd_ostream CLOS(CGM.OpenMPSupport.createTempFile(), true);
@@ -1315,7 +1245,7 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
       default:
         initializer = "";
       }
-      if (initializer == "") {
+      if (initializer.empty()) {
         // custom initializer is already inserted in include file
         templateId = 1; /* signal user-defined operation */
       } else {
@@ -1411,6 +1341,4 @@ void CodeGenFunction::EmitOMPReductionAsCLKernel(const OMPLoopDirective &S) {
           " " + std::to_string(templateId) + " '" + operatorName + "' ";
       std::system(generator.c_str());
     }
-  }
-  return;
 }
