@@ -227,15 +227,9 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
     const NamedDecl *ND = D->getDecl();
     if (!isa<VarDecl>(ND)) return nullptr;
 
-    const VarDecl *VD = dyn_cast<VarDecl>(ND);
+    const auto *VD = dyn_cast<VarDecl>(ND);
     CharUnits Alignment = getContext().getDeclAlign(ND);
     QualType T = D->getType();
-
-    // check if global Named registers accessed via intrinsics only
-    if (VD->getStorageClass() == SC_Register &&
-        VD->hasAttr<AsmLabelAttr>() && !VD->isLocalVarDecl()) {
-        /* FIX-ME: return (EmitGlobalNamedRegister(VD, CGM, Alignment)).getAddress(); */
-    }
 
     // DeclRefExpr for a reference initialized by a constant expression
     const Expr *Init = VD->getAnyInitializer(VD);
@@ -243,6 +237,7 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
         llvm::Constant *Val = CGM.EmitConstantValue(*VD->evaluateValue(), VD->getType(), this);
         assert(Val && "failed to emit reference constant expression");
         /* FIX-ME: return (MakeAddrLValue(Val, T, Alignment)).getAddress(); */
+        return nullptr;
     }
 
     if (ND->hasAttr<WeakRefAttr>()) {
@@ -251,44 +246,46 @@ llvm::Value *CodeGenFunction::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
         return (MakeAddrLValue(Aliasee, T, Alignment)).getAddress().getPointer();
     }
 
-    if (const auto *VD = dyn_cast<VarDecl>(ND)) {
-        // Check if this is a global variable.
-        if (VD->hasLinkage() || VD->isStaticDataMember()) {
-            /* FIX-ME: return (EmitGlobalVarDeclLValue(*this, D, VD)).getAddress(); */
-        }
+    // Check if this is a global variable.
+    if (VD->hasLinkage() || VD->isStaticDataMember()) {
+        /* FIX-ME: return (EmitGlobalVarDeclLValue(*this, D, VD)).getAddress(); */
+        return nullptr;
+    }
+    else {
+        bool isBlockVariable = VD->hasAttr<BlocksAttr>();
+        CharUnits alignment = getContext().getDeclAlign(VD);
+        llvm::Type *VDTy = ConvertTypeForMem(T);
+        Address VDadd = CreateTempAlloca(VDTy, alignment);
+        VDadd.getPointer()->setName(VD->getName());
+        llvm::Value *V = VDadd.getPointer();
+        if (!V && VD->isStaticLocal())
+            V = CGM.getStaticLocalDeclAddress(VD);
+        if (!V) return nullptr;
         else {
-            bool isBlockVariable = VD->hasAttr<BlocksAttr>();
-            auto VDadd = LocalDeclMap.lookup(VD);
-            llvm::Value *V = VDadd.getPointer();
-            if (!V && VD->isStaticLocal())
-                V = CGM.getStaticLocalDeclAddress(VD);
-            if (!V) return nullptr;
-            else {
-                LValue LV;
-                /* FIX-ME: if (isBlockVariable) V = BuildBlockByrefAddress(V, VD); */
-                if (VD->getType()->isReferenceType()) {
-                    llvm::LoadInst *LI = Builder.CreateLoad(VDadd);
-                    LI->setAlignment(Alignment.getQuantity());
-                    V = LI;
-                    LV = MakeNaturalAlignAddrLValue(V, T);
-                } else {
-                    LV = MakeAddrLValue(V, T, Alignment);
-                }
-                bool isLocalStorage = VD->hasLocalStorage();
-                bool NonGCable = isLocalStorage &&
-                                 !VD->getType()->isReferenceType() &&
-                                 !isBlockVariable;
-                if (NonGCable) {
-                    LV.getQuals().removeObjCGCAttr();
-                    LV.setNonGC(true);
-                }
-                bool isImpreciseLifetime = (isLocalStorage && !VD->hasAttr<ObjCPreciseLifetimeAttr>());
-                if (isImpreciseLifetime) LV.setARCPreciseLifetime(ARCImpreciseLifetime);
-                /* FIX-ME: setObjCGCLValueClass(getContext(), D, LV); */
-                return LV.getAddress().getPointer();
+            LValue LV;
+            /* FIX-ME: if (isBlockVariable) V = BuildBlockByrefAddress(V, VD); */
+            if (VD->getType()->isReferenceType()) {
+                llvm::LoadInst *LI = Builder.CreateLoad(VDadd);
+                LI->setAlignment(Alignment.getQuantity());
+                V = LI;
+                LV = MakeNaturalAlignAddrLValue(V, T);
+            } else {
+                LV = MakeAddrLValue(V, T, Alignment);
             }
-            return nullptr;
+            bool isLocalStorage = VD->hasLocalStorage();
+            bool NonGCable = isLocalStorage &&
+                             !VD->getType()->isReferenceType() &&
+                             !isBlockVariable;
+            if (NonGCable) {
+                LV.getQuals().removeObjCGCAttr();
+                LV.setNonGC(true);
+            }
+            bool isImpreciseLifetime = (isLocalStorage && !VD->hasAttr<ObjCPreciseLifetimeAttr>());
+            if (isImpreciseLifetime) LV.setARCPreciseLifetime(ARCImpreciseLifetime);
+            /* FIX-ME: setObjCGCLValueClass(getContext(), D, LV); */
+            return LV.getAddress().getPointer();
         }
+        return nullptr;
     }
     return nullptr;
 }
