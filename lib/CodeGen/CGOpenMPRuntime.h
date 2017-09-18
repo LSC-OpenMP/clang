@@ -1300,6 +1300,7 @@ public:
                               llvm::Value *OutlinedFn,
                               llvm::Value *OutlinedFnID, const Expr *IfCond,
                               const Expr *Device,
+                              std::string Name,
                               ArrayRef<llvm::Value *> CapturedVars);
 
   /// \brief Emit the target regions enclosed in \a GD function definition or

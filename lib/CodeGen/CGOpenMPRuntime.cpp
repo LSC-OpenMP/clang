@@ -3354,13 +3354,23 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
 
   auto &Triple = CGM.getTarget().getTargetOpts().Triple;
 
+  // TODO(ciroceissler): this is temporary, please remove.
+  this->TgtFPGAModule = "sobel.rbf";
+
+  llvm::errs() << "triple       : " << Triple << "\n";
+  llvm::errs() << "module       : " << this->TgtFPGAModule << "\n";
+
   if (Triple == "smartnic") {
     sub_target_id = 9001;
   } else if (Triple == "harp") {
     sub_target_id = 9002;
+  } else if (Triple == "harpsim") {
+    sub_target_id = 9004;
   } else {
     return;
   }
+
+  llvm::errs() << "sub_target_id: " << sub_target_id << "\n";
 
   ConstantInitBuilder EntryBuilder(CGM);
   auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
@@ -6772,6 +6782,7 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
                                      llvm::Value *OutlinedFn,
                                      llvm::Value *OutlinedFnID,
                                      const Expr *IfCond, const Expr *Device,
+                                     std::string Name,
                                      ArrayRef<llvm::Value *> CapturedVars) {
   if (!CGF.HaveInsertPoint())
     return;
@@ -8070,20 +8081,11 @@ void CGOpenMPRuntime::registerTrackedFunction() {
 }
 
 void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
-  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
+  const OMPCheckClause *C_check = S.getSingleClause<OMPCheckClause>();
 
-  if (C) {
-    if (C->getUseKind() == OMPC_USE_hrw) {
-      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
-
-      // TODO(ciroceissler): get module name
-      this->TgtFPGAModule = "name_module";
-
-      // TODO(ciroceissler): add this funcionality in the future
-      if (c_check) {
-      //   llvm::errs() << "check!\n";
-      }
-    }
+  // TODO(ciroceissler): add this funcionality in the future
+  if (C_check) {
+  //   llvm::errs() << "check!\n";
   }
 }
 

@@ -362,7 +362,6 @@ OPENMP_USE_KIND(bdx)
 OPENMP_USE_KIND(psbdx)
 OPENMP_USE_KIND(psbdx2)
 OPENMP_USE_KIND(doacross)
-OPENMP_USE_KIND(hrw)
 OPENMP_USE_KIND(tls)
 
 // Static attributes for 'proc_bind' clause.

@@ -8832,6 +8832,7 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
     return new X86_64TargetInfo(TripleSmartnic, Opts);
 
   case llvm::Triple::harp:
+  case llvm::Triple::harpsim:
     return new X86_64TargetInfo(TripleHarp, Opts);
 
   case llvm::Triple::x86_64:
