@@ -2245,6 +2245,8 @@ void OMPClauseWriter::VisitOMPInReductionClause(OMPInReductionClause *C) {
     Record.AddStmt(E);
   for (auto *E : C->reduction_ops())
     Record.AddStmt(E);
+  for (auto *E : C->taskgroup_descriptors())
+    Record.AddStmt(E);
 }
 
 //===----------------------------------------------------------------------===//
@@ -2481,6 +2483,7 @@ void ASTStmtWriter::VisitOMPTaskgroupDirective(OMPTaskgroupDirective *D) {
   VisitStmt(D);
   Record.push_back(D->getNumClauses());
   VisitOMPExecutableDirective(D);
+  Record.AddStmt(D->getReductionRef());
   Code = serialization::STMT_OMP_TASKGROUP_DIRECTIVE;
 }
 

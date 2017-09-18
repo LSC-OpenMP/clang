@@ -3126,6 +3126,8 @@ RecursiveASTVisitor<Derived>::VisitOMPInReductionClause(OMPInReductionClause *C)
   for (auto *E : C->reduction_ops()) {
     TRY_TO(TraverseStmt(E));
   }
+  for (auto *E : C->taskgroup_descriptors())
+    TRY_TO(TraverseStmt(E));
   return true;
 }
 
