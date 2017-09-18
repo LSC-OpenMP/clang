@@ -3979,8 +3979,6 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
   if (auto *C = S.getSingleClause<OMPDeviceClause>()) {
     Device = C->getDevice();
     Name = C->getName();
-
-    llvm::errs() << ">>> test Name1: " << Name << "\n";
   }
 
   // Check if we have an if clause whose conditional always evaluates to false

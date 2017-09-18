@@ -746,6 +746,8 @@ enum OpenMPRTLFunction {
   // *host_ptr, int32_t arg_num, void** args_base, void **args, size_t
   // *arg_sizes, int64_t *arg_types, int32_t num_teams, int32_t thread_limit);
   OMPRTL__tgt_target_teams_nowait,
+  // Call to int32_t __tgt_target_fpga(int64_t device_id, void *module);
+  OMPRTL__tgt_target_fpga,
   // Call to void __tgt_register_lib(__tgt_bin_desc *desc);
   OMPRTL__tgt_register_lib,
   // Call to void __tgt_unregister_lib(__tgt_bin_desc *desc);
@@ -2227,6 +2229,14 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_teams_nowait");
+    break;
+  }
+  case OMPRTL__tgt_target_fpga: {
+    // Build int32_t __tgt_target_fpga(int64_t device_id, void *module);
+    llvm::Type *TypeParams[] = {CGM.Int64Ty, CGM.VoidPtrTy};
+    llvm::FunctionType *FnTy =
+        llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_fpga");
     break;
   }
   case OMPRTL__tgt_register_lib: {
@@ -3823,12 +3833,6 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
 
   auto &Triple = CGM.getTarget().getTargetOpts().Triple;
 
-  // TODO(ciroceissler): this is temporary, please remove.
-  this->TgtFPGAModule = "sobel.rbf";
-
-  llvm::errs() << "triple       : " << Triple << "\n";
-  llvm::errs() << "module       : " << this->TgtFPGAModule << "\n";
-
   if (Triple == "smartnic") {
     sub_target_id = 9001;
   } else if (Triple == "harp") {
@@ -3838,8 +3842,6 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   } else {
     return;
   }
-
-  llvm::errs() << "sub_target_id: " << sub_target_id << "\n";
 
   ConstantInitBuilder EntryBuilder(CGM);
   auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
@@ -7873,7 +7875,7 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
   // Fill up the pointer arrays and transfer execution to the device.
   auto &&ThenGen = [&Ctx, &BasePointers, &Pointers, &Sizes, &MapTypes, Device,
                     OutlinedFnID, OffloadError, OffloadErrorQType, &D,
-                    hasNowait](CodeGenFunction &CGF, PrePostActionTy &) {
+                    hasNowait, Name](CodeGenFunction &CGF, PrePostActionTy &) {
     auto &RT = CGF.CGM.getOpenMPRuntime();
     // Emit the offloading arrays.
     TargetDataInfo Info;
@@ -7910,6 +7912,24 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
 
     auto *NumTeams = emitNumTeamsClauseForTargetDirective(RT, CGF, D);
     auto *ThreadLimit = emitThreadLimitClauseForTargetDirective(RT, CGF, D);
+
+    // Create constant string with the name.
+    llvm::LLVMContext &C = CGF.CGM.getModule().getContext();
+    llvm::Module &M = CGF.CGM.getModule();
+    llvm::Constant *StrPtrInit =
+        llvm::ConstantDataArray::getString(C, Name);
+
+    llvm::GlobalVariable *Str =
+        new llvm::GlobalVariable(M, StrPtrInit->getType(), /*isConstant=*/true,
+                                 llvm::GlobalValue::InternalLinkage, StrPtrInit);
+    Str->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+    llvm::Value *StrPtr = llvm::ConstantExpr::getBitCast(Str, CGF.CGM.Int8PtrTy);
+
+    llvm::Value *FPGA_Args[] = {DeviceID, StrPtr};
+
+    CGF.EmitRuntimeCall(
+        RT.createRuntimeFunction(OMPRTL__tgt_target_fpga),
+        FPGA_Args);
 
     // If we have NumTeams defined this means that we have an enclosed teams
     // region. Therefore we also expect to have ThreadLimit defined. These two
