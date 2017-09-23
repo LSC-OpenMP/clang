@@ -37,6 +37,7 @@ void without_schedule_clause(float *a, float *b, float *c, float *d) {
   for (int i = 33; i < 32000000; i += 7) {
 // CHECK: [[LOOP1_BODY]]
 // Start of body: calculate i from IV:
+// CHECK: load i32, i32* [[OMP_IV]]
 // CHECK: [[IV1_1:%.+]] = load i32, i32* [[OMP_IV]]
 // CHECK-NEXT: [[CALC_I_1:%.+]] = mul nsw i32 [[IV1_1]], 7
 // CHECK-NEXT: [[CALC_I_2:%.+]] = add nsw i32 33, [[CALC_I_1]]
@@ -52,7 +53,7 @@ void without_schedule_clause(float *a, float *b, float *c, float *d) {
 // CHECK-NEXT: br label %{{.+}}
   }
 // CHECK: [[LOOP1_END]]
-// CHECK: call void @__kmpc_for_static_fini([[IDENT_T_TY]]* [[DEFAULT_LOC]], i32 [[GTID]])
+// CHECK: call void @__kmpc_for_static_fini([[IDENT_T_TY]]* [[LOOP_LOC]], i32 [[GTID]])
 // CHECK-NOT: __kmpc_barrier
 // CHECK: ret void
 }
@@ -78,6 +79,7 @@ void static_not_chunked(float *a, float *b, float *c, float *d) {
   for (int i = 32000000; i > 33; i += -7) {
 // CHECK: [[LOOP1_BODY]]
 // Start of body: calculate i from IV:
+// CHECK: load i32, i32* [[OMP_IV]]
 // CHECK: [[IV1_1:%.+]] = load i32, i32* [[OMP_IV]]
 // CHECK-NEXT: [[CALC_I_1:%.+]] = mul nsw i32 [[IV1_1]], 7
 // CHECK-NEXT: [[CALC_I_2:%.+]] = sub nsw i32 32000000, [[CALC_I_1]]
@@ -93,7 +95,7 @@ void static_not_chunked(float *a, float *b, float *c, float *d) {
 // CHECK-NEXT: br label %{{.+}}
   }
 // CHECK: [[LOOP1_END]]
-// CHECK: call void @__kmpc_for_static_fini([[IDENT_T_TY]]* [[DEFAULT_LOC]], i32 [[GTID]])
+// CHECK: call void @__kmpc_for_static_fini([[IDENT_T_TY]]* [[LOOP_LOC]], i32 [[GTID]])
 // CHECK: call {{.+}} @__kmpc_barrier([[IDENT_T_TY]]* [[IMPLICIT_BARRIER_LOC]], i32 [[GTID]])
 // CHECK: ret void
 }
@@ -127,6 +129,7 @@ void static_chunked(float *a, float *b, float *c, float *d) {
   for (unsigned i = 131071; i <= 2147483647; i += 127) {
 // CHECK: [[LOOP1_BODY]]
 // Start of body: calculate i from IV:
+// CHECK: load i32, i32* [[OMP_IV]]
 // CHECK: [[IV1_1:%.+]] = load i32, i32* [[OMP_IV]]
 // CHECK-NEXT: [[CALC_I_1:%.+]] = mul i32 [[IV1_1]], 127
 // CHECK-NEXT: [[CALC_I_2:%.+]] = add i32 131071, [[CALC_I_1]]
@@ -153,7 +156,7 @@ void static_chunked(float *a, float *b, float *c, float *d) {
 // CHECK-NEXT: store i32 [[ADD_UB]], i32* [[OMP_UB]]
 
 // CHECK: [[O_LOOP1_END]]
-// CHECK: call void @__kmpc_for_static_fini([[IDENT_T_TY]]* [[DEFAULT_LOC]], i32 [[GTID]])
+// CHECK: call void @__kmpc_for_static_fini([[IDENT_T_TY]]* [[LOOP_LOC]], i32 [[GTID]])
 // CHECK: call {{.+}} @__kmpc_barrier([[IDENT_T_TY]]* [[IMPLICIT_BARRIER_LOC]], i32 [[GTID]])
 // CHECK: ret void
 }
@@ -180,6 +183,7 @@ void dynamic1(float *a, float *b, float *c, float *d) {
   for (unsigned long long i = 131071; i < 2147483647; i += 127) {
 // CHECK: [[LOOP1_BODY]]
 // Start of body: calculate i from IV:
+// CHECK: load i64, i64* [[OMP_IV]]
 // CHECK: [[IV1_1:%.+]] = load i64, i64* [[OMP_IV]]
 // CHECK-NEXT: [[CALC_I_1:%.+]] = mul i64 [[IV1_1]], 127
 // CHECK-NEXT: [[CALC_I_2:%.+]] = add i64 131071, [[CALC_I_1]]
@@ -221,6 +225,7 @@ void guided7(float *a, float *b, float *c, float *d) {
   for (unsigned long long i = 131071; i < 2147483647; i += 127) {
 // CHECK: [[LOOP1_BODY]]
 // Start of body: calculate i from IV:
+// CHECK: load i64, i64* [[OMP_IV]]
 // CHECK: [[IV1_1:%.+]] = load i64, i64* [[OMP_IV]]
 // CHECK-NEXT: [[CALC_I_1:%.+]] = mul i64 [[IV1_1]], 127
 // CHECK-NEXT: [[CALC_I_2:%.+]] = add i64 131071, [[CALC_I_1]]
@@ -481,6 +486,18 @@ void loop_with_It(It<char> begin, It<char> end) {
 }
 
 // CHECK-LABEL: loop_with_It
+// CHECK: call i32 @__kmpc_global_thread_num(
+// CHECK: call void @__kmpc_for_static_init_8(
+// CHECK: call void @__kmpc_for_static_fini(
+
+void loop_with_It_plus(It<char> begin, It<char> end) {
+#pragma omp for
+  for (It<char> it = begin; it < end; it+=1u) {
+    *it = 0;
+  }
+}
+
+// CHECK-LABEL: loop_with_It_plus
 // CHECK: call i32 @__kmpc_global_thread_num(
 // CHECK: call void @__kmpc_for_static_init_8(
 // CHECK: call void @__kmpc_for_static_fini(

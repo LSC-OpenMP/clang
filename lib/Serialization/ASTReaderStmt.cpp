@@ -1853,6 +1853,10 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_flush:
     C = OMPFlushClause::CreateEmpty(Context, Reader->Record.readInt());
     break;
+  case OMPC_lastprivate_update:
+    C = OMPLastprivateUpdateClause::CreateEmpty(Context,
+                                                Reader->Record.readInt());
+    break;
   case OMPC_depend:
     C = OMPDependClause::CreateEmpty(Context, Reader->Record.readInt());
     break;
@@ -2108,6 +2112,14 @@ void OMPClauseReader::VisitOMPLastprivateClause(OMPLastprivateClause *C) {
   Vars.clear();
   for (unsigned i = 0; i != NumVars; ++i)
     Vars.push_back(Reader->Record.readSubExpr());
+  C->setConditionalLastprivateIterations(Vars);
+  Vars.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Reader->Record.readSubExpr());
+  C->setConditionalLastprivateVariables(Vars);
+  Vars.clear();
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Reader->Record.readSubExpr());
   C->setSourceExprs(Vars);
   Vars.clear();
   for (unsigned i = 0; i != NumVars; ++i)
@@ -2252,6 +2264,17 @@ void OMPClauseReader::VisitOMPCopyprivateClause(OMPCopyprivateClause *C) {
 }
 
 void OMPClauseReader::VisitOMPFlushClause(OMPFlushClause *C) {
+  C->setLParenLoc(Reader->ReadSourceLocation());
+  unsigned NumVars = C->varlist_size();
+  SmallVector<Expr *, 16> Vars;
+  Vars.reserve(NumVars);
+  for (unsigned i = 0; i != NumVars; ++i)
+    Vars.push_back(Reader->Record.readSubExpr());
+  C->setVarRefs(Vars);
+}
+
+void OMPClauseReader::VisitOMPLastprivateUpdateClause(
+    OMPLastprivateUpdateClause *C) {
   C->setLParenLoc(Reader->ReadSourceLocation());
   unsigned NumVars = C->varlist_size();
   SmallVector<Expr *, 16> Vars;
@@ -2660,6 +2683,8 @@ void ASTStmtReader::VisitOMPLoopDirective(OMPLoopDirective *D) {
   D->setNumLanes(Record.readSubExpr());
   D->setInc(Record.readSubExpr());
   D->setPreInits(Record.readSubStmt());
+  D->setConditionalLastprivateIterVariable(Record.readSubExpr());
+  D->setConditionalLastprivateIterInit(Record.readSubExpr());
   if (isOpenMPWorksharingDirective(D->getDirectiveKind()) ||
       isOpenMPTaskLoopDirective(D->getDirectiveKind()) ||
       isOpenMPDistributeDirective(D->getDirectiveKind())) {
@@ -2729,6 +2754,7 @@ void ASTStmtReader::VisitOMPSectionsDirective(OMPSectionsDirective *D) {
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
   D->setHasCancel(Record.readInt());
+  D->setConditionalLastprivateIterVariable(Record.readSubExpr());
 }
 
 void ASTStmtReader::VisitOMPSectionDirective(OMPSectionDirective *D) {
@@ -2774,6 +2800,7 @@ void ASTStmtReader::VisitOMPParallelSectionsDirective(
   Record.skipInts(1);
   VisitOMPExecutableDirective(D);
   D->setHasCancel(Record.readInt());
+  D->setConditionalLastprivateIterVariable(Record.readSubExpr());
 }
 
 void ASTStmtReader::VisitOMPTaskDirective(OMPTaskDirective *D) {
@@ -2810,6 +2837,14 @@ void ASTStmtReader::VisitOMPTaskgroupDirective(OMPTaskgroupDirective *D) {
 }
 
 void ASTStmtReader::VisitOMPFlushDirective(OMPFlushDirective *D) {
+  VisitStmt(D);
+  // The NumClauses field was read in ReadStmtFromStream.
+  Record.skipInts(1);
+  VisitOMPExecutableDirective(D);
+}
+
+void ASTStmtReader::VisitOMPLastprivateUpdateDirective(
+    OMPLastprivateUpdateDirective *D) {
   VisitStmt(D);
   // The NumClauses field was read in ReadStmtFromStream.
   Record.skipInts(1);
@@ -3584,6 +3619,11 @@ Stmt *ASTReader::ReadStmtFromStream(ModuleFile &F) {
 
     case STMT_OMP_FLUSH_DIRECTIVE:
       S = OMPFlushDirective::CreateEmpty(
+          Context, Record[ASTStmtReader::NumStmtFields], Empty);
+      break;
+
+    case STMT_OMP_LASTPRIVATE_UPDATE_DIRECTIVE:
+      S = OMPLastprivateUpdateDirective::CreateEmpty(
           Context, Record[ASTStmtReader::NumStmtFields], Empty);
       break;
 

@@ -79,6 +79,9 @@ struct TT{
   ty Y;
 };
 
+int global;
+extern int global;
+
 // CHECK: define {{.*}}[[FOO:@.+]](
 int foo(int n) {
   int a = 0;
@@ -107,9 +110,9 @@ int foo(int n) {
   // CHECK:       [[RET2:%.+]] = load i32, i32* [[RHV]], align 4
   // CHECK-NEXT:  [[ERROR:%.+]] = icmp ne i32 [[RET2]], 0
   // CHECK:       call void [[HVT1:@.+]](i[[SZ]] {{[^,]+}})
-  #pragma omp target if(0)
+  #pragma omp target if(0) firstprivate(global)
   {
-    a += 1;
+    global += 1;
   }
 
   // CHECK-DAG:   [[RET:%.+]] = call i32 @__tgt_target(i64 -1, i8* @{{[^,]+}}, i32 1, i8** [[BP:%[^,]+]], i8** [[P:%[^,]+]], i[[SZ]]* getelementptr inbounds ([1 x i[[SZ]]], [1 x i[[SZ]]]* [[SIZET2]], i32 0, i32 0), i64* getelementptr inbounds ([1 x i64], [1 x i64]* [[MAPT2]], i32 0, i32 0))

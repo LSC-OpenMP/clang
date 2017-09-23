@@ -4960,8 +4960,17 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (DebugInfoKind == codegenoptions::LimitedDebugInfo && NeedFullDebug)
     DebugInfoKind = codegenoptions::FullDebugInfo;
 
-  RenderDebugEnablingArgs(Args, CmdArgs, DebugInfoKind, DwarfVersion,
-                          DebuggerTuning);
+  bool IsOpenMPCudaDeviceDebug =
+      IsOpenMPDevice && DebuggerTuning == llvm::DebuggerKind::CudaGDB &&
+      (!areOptimizationsEnabled(Args) ||
+        Args.hasFlag(options::OPT_cuda_noopt_device_debug,
+                     options::OPT_no_cuda_noopt_device_debug,
+                     /*Default=*/false));
+  if (IsOpenMPCudaDeviceDebug || !IsOpenMPDevice ||
+      DebuggerTuning != llvm::DebuggerKind::CudaGDB) {
+    RenderDebugEnablingArgs(Args, CmdArgs, DebugInfoKind, DwarfVersion,
+                            DebuggerTuning);
+  }
 
   // -ggnu-pubnames turns on gnu style pubnames in the backend.
   if (Args.hasArg(options::OPT_ggnu_pubnames)) {
@@ -5134,7 +5143,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.ClaimAllArgs(options::OPT_D);
 
   // Manually translate -O4 to -O3; let clang reject others.
-  if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+  if (IsOpenMPCudaDeviceDebug) {
+    CmdArgs.emplace_back("-O0");
+  } else if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
     if (A->getOption().matches(options::OPT_O4)) {
       CmdArgs.push_back("-O3");
       D.Diag(diag::warn_O4_is_O3);
@@ -6563,6 +6574,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    options::OPT_fnoopenmp_implicit_declare_target,
                    /*Default=*/false))
     CmdArgs.push_back("-fopenmp-implicit-declare-target");
+
+  if(Args.hasFlag(options::OPT_fopenmp_implicit_map_lambdas,
+                  options::OPT_fnoopenmp_implicit_map_lambdas,
+                  false))
+    CmdArgs.push_back("-fopenmp-implicit-map-lambdas");
 
   if (Args.hasFlag(options::OPT_fopenmp_nvptx_nospmd,
                    options::OPT_fopenmp_nvptx_spmd,
@@ -12170,8 +12186,22 @@ void NVPTX::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
 
   ArgStringList CmdArgs;
   CmdArgs.push_back(TC.getTriple().isArch64Bit() ? "-m64" : "-m32");
+  bool IsOpenMPDebug = false;
+  if (Arg *A = Args.getLastArg(options::OPT_g_Group)) {
+    IsOpenMPDebug = JA.isOffloading(Action::OFK_OpenMP) &&
+                    (!areOptimizationsEnabled(Args) ||
+                     Args.hasFlag(options::OPT_cuda_noopt_device_debug,
+                                  options::OPT_no_cuda_noopt_device_debug,
+                                  /*Default=*/false));
+    // If the last option explicitly specified a debug-info level, use it.
+    if (A->getOption().matches(options::OPT_gN_Group)) {
+      IsOpenMPDebug = IsOpenMPDebug &&
+                      DebugLevelToInfoKind(*A) != codegenoptions::NoDebugInfo;
+    }
+  }
   if (Args.hasFlag(options::OPT_cuda_noopt_device_debug,
-                   options::OPT_no_cuda_noopt_device_debug, false)) {
+                   options::OPT_no_cuda_noopt_device_debug, false) ||
+      IsOpenMPDebug) {
     // ptxas does not accept -g option if optimization is enabled, so
     // we ignore the compiler's -O* options if we want debug info.
     CmdArgs.push_back("-g");
@@ -12233,17 +12263,8 @@ void NVPTX::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.append(CmdPtxasArgs.begin(), CmdPtxasArgs.end());
 
   // In OpenMP we need to generate relocatable code.
-  if (JA.isOffloading(Action::OFK_OpenMP)) {
+  if (JA.isOffloading(Action::OFK_OpenMP))
     CmdArgs.push_back("-c");
-    bool O0Opt = true;
-    if (Arg *A = Args.getLastArg(options::OPT_O_Group))
-      O0Opt = A->getOption().matches(options::OPT_O0);
-    if (O0Opt && Args.hasArg(options::OPT_g_Flag)) {
-      CmdArgs.push_back("-g");
-      CmdArgs.push_back("--dont-merge-basicblocks");
-      CmdArgs.push_back("--return-at-end");
-    }
-  }
 
   const char *Exec;
   if (Arg *A = Args.getLastArg(options::OPT_ptxas_path_EQ))
