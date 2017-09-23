@@ -89,18 +89,27 @@ public:
   void operator()(CodeGenFunction &CGF) const;
 };
 
+typedef std::pair<OpenMPDependClauseKind, const Expr *> DependenceType;
 struct OMPTaskDataTy final {
+  enum ImplicitMapArray {
+    OMP_BASE_PTRS = 0,
+    OMP_PTRS = 1,
+    OMP_SIZES = 2,
+    OMP_TARGET_ARG_NUMBER = 3
+  };
   SmallVector<const Expr *, 4> PrivateVars;
   SmallVector<const Expr *, 4> PrivateCopies;
   SmallVector<const Expr *, 4> FirstprivateVars;
   SmallVector<const Expr *, 4> FirstprivateCopies;
   SmallVector<const Expr *, 4> FirstprivateInits;
+  ImplicitParamDecl *FirstprivateSimpleArrayImplicit[OMP_TARGET_ARG_NUMBER];
+  ImplicitParamDecl *FirstprivateRefsSimpleArrayImplicit[OMP_TARGET_ARG_NUMBER];
   SmallVector<const Expr *, 4> LastprivateVars;
   SmallVector<const Expr *, 4> LastprivateCopies;
   SmallVector<const Expr *, 4> ReductionVars;
   SmallVector<const Expr *, 4> ReductionCopies;
   SmallVector<const Expr *, 4> ReductionOps;
-  SmallVector<std::pair<OpenMPDependClauseKind, const Expr *>, 4> Dependences;
+  SmallVector<DependenceType, 4> Dependences;
   llvm::PointerIntPair<llvm::Value *, 1, bool> Final;
   llvm::PointerIntPair<llvm::Value *, 1, bool> Schedule;
   llvm::PointerIntPair<llvm::Value *, 1, bool> Priority;
@@ -108,6 +117,7 @@ struct OMPTaskDataTy final {
   unsigned NumberOfParts = 0;
   bool Tied = true;
   bool Nogroup = false;
+  bool HasImplicitTargetArrays = false;
 };
 
 /// Class intended to support codegen of all kind of the reduction clauses.
@@ -198,6 +208,224 @@ public:
   bool usesReductionInitializer(unsigned N) const;
 };
 
+/// Utility to handle information from clauses associated with a given
+/// construct that use mappable expressions (e.g. 'map' clause, 'to' clause).
+/// It provides a convenient interface to obtain the information and generate
+/// code for that information.
+class MappableExprsHandler {
+public:
+  /// Values for bit flags used to specify the mapping type for
+  /// offloading.
+  enum OpenMPOffloadMappingFlags {
+    /// No flags
+    OMP_MAP_NONE = 0x0,
+    ///  Allocate memory on the device and move data from host to device.
+    OMP_MAP_TO = 0x01,
+    ///  Allocate memory on the device and move data from device to host.
+    OMP_MAP_FROM = 0x02,
+    ///  Always perform the requested mapping action on the element, even
+    /// if it was already mapped before.
+    OMP_MAP_ALWAYS = 0x04,
+    /// Delete the element from the device environment, ignoring the
+    /// current reference count associated with the element.
+    OMP_MAP_DELETE = 0x08,
+    /// The element being mapped is a pointer-pointee pair; both the
+    /// pointer and the pointee should be mapped.
+    OMP_MAP_PTR_AND_OBJ = 0x10,
+    /// This flags signals that the base address of an entry should be
+    /// passed to the target kernel as an argument.
+    OMP_MAP_TARGET_PARAM = 0x20,
+    /// Signal that the runtime library has to return the device pointer
+    /// in the current position for the data being mapped. Used when we have the
+    /// use_device_ptr clause.
+    OMP_MAP_RETURN_PARAM = 0x40,
+    /// This flag signals that the reference being passed is a pointer to
+    /// private data.
+    OMP_MAP_PRIVATE = 0x80,
+    /// Pass the element to the device by value.
+    OMP_MAP_LITERAL = 0x100,
+    /// States the map is implicit.
+    OMP_MAP_IMPLICIT = 0x200,
+    /// The 16 MSBs of the flags indicate whether the entry is member of
+    /// some struct/class.
+    OMP_MAP_MEMBER_OF = 0xffff000000000000,
+    LLVM_MARK_AS_BITMASK_ENUM(/*LargestValue=*/OMP_MAP_MEMBER_OF)
+  };
+
+  /// Class that associates information with a base pointer to be passed to the
+  /// runtime library.
+  class BasePointerInfo {
+    /// The base pointer.
+    llvm::Value *Ptr = nullptr;
+    /// The base declaration that refers to this device pointer, or null if
+    /// there is none.
+    const ValueDecl *DevPtrDecl = nullptr;
+
+  public:
+    BasePointerInfo(llvm::Value *Ptr, const ValueDecl *DevPtrDecl = nullptr)
+        : Ptr(Ptr), DevPtrDecl(DevPtrDecl) {}
+    llvm::Value *operator*() const { return Ptr; }
+    const ValueDecl *getDevicePtrDecl() const { return DevPtrDecl; }
+    void setDevicePtrDecl(const ValueDecl *D) { DevPtrDecl = D; }
+  };
+
+  typedef SmallVector<BasePointerInfo, 16> MapBaseValuesArrayTy;
+  typedef SmallVector<llvm::Value *, 16> MapValuesArrayTy;
+  typedef SmallVector<uint64_t, 16> MapFlagsArrayTy;
+  // Need to store the index into the other map arrays as well as the lambda
+  // itself.
+  typedef SmallVector<const clang::RecordDecl *, 16> MapLambdasArrayTy;
+
+  /// Map between a struct and the its lowest & highest elements which have been
+  /// mapped.
+  /// [ValueDecl *] --> {LE(FieldIndex, Pointer, Size),
+  ///                    HE(FieldIndex, Pointer, Size)}
+  typedef struct {
+    unsigned FieldIndex;
+    llvm::Value *Pointer;
+    llvm::Value *Size;
+  } StructMemberInfoTy;
+
+  typedef struct {
+    StructMemberInfoTy LowestElem;
+    StructMemberInfoTy HighestElem;
+    llvm::Value *Base;
+  } StructRangeInfoTy;
+
+  typedef llvm::MapVector<const ValueDecl *, StructRangeInfoTy>
+      StructRangeMapTy;
+
+  // Mark the index in a BasePointers array where arguments of a struct are
+  // generated alongside the number of those arguments. Elements in
+  // StructRangeMapTy and StructIndicesTy are meant to be inserted in the same
+  // order.
+  typedef SmallVector<std::pair<unsigned, unsigned>, 16> StructIndicesTy;
+
+  static uint64_t getMemberOfFlag(unsigned Position) {
+    // Member of is given by the 16 MSB of the flag, so rotate by 48 bits.
+    return ((uint64_t)Position + 1) << 48;
+  }
+
+private:
+  /// Directive from where the map clauses were extracted.
+  const OMPExecutableDirective &CurDir;
+
+  /// Function the directive is being generated for.
+  CodeGenFunction &CGF;
+
+  /// Set of all first private variables in the current directive.
+  llvm::SmallPtrSet<const VarDecl *, 8> FirstPrivateDecls;
+
+  /// Map between device pointer declarations and their expression components.
+  /// The key value for declarations in 'this' is null.
+  llvm::DenseMap<
+      const ValueDecl *,
+      SmallVector<OMPClauseMappableExprCommon::MappableExprComponentListRef, 4>>
+      DevPointersMap;
+
+  llvm::Value *getExprTypeSize(const Expr *E) const;
+
+  /// Return the corresponding bits for a given map clause modifier. Add
+  /// a flag marking the map as a pointer if requested. Add a flag marking the
+  /// map as the first one of a series of maps that relate to the same map
+  /// expression.
+  uint64_t getMapTypeBits(OpenMPMapClauseKind MapType,
+                          OpenMPMapClauseKind MapTypeModifier, bool AddPtrFlag,
+                          bool AddIsTargetParamFlag) const;
+
+  /// Return true if the provided expression is a final array section. A
+  /// final array section, is one whose length can't be proved to be one.
+  bool isFinalArraySectionExpression(const Expr *E) const;
+
+  /// Return the adjusted map modifiers if the declaration a capture
+  /// refers to appears in a first-private clause. This is expected to be used
+  /// only with directives that start with 'target'.
+  unsigned adjustMapModifiersForPrivateClauses(const CapturedStmt::Capture &Cap,
+                                               unsigned CurrentModifiers) {
+    assert(Cap.capturesVariable() && "Expected capture by reference only!");
+
+    // A first private variable captured by reference will use only the
+    // 'private ptr' and 'map to' flag. Return the right flags if the captured
+    // declaration is known as first-private in this handler.
+    if (FirstPrivateDecls.count(Cap.getCapturedVar()))
+      return MappableExprsHandler::OMP_MAP_PRIVATE |
+             MappableExprsHandler::OMP_MAP_TO;
+
+    // We didn't modify anything.
+    return CurrentModifiers;
+  }
+
+public:
+  MappableExprsHandler(const OMPExecutableDirective &Dir, CodeGenFunction &CGF)
+      : CurDir(Dir), CGF(CGF) {
+    // Extract firstprivate clause information.
+    for (const auto *C : Dir.getClausesOfKind<OMPFirstprivateClause>())
+      for (const auto *D : C->varlists())
+        FirstPrivateDecls.insert(
+            cast<VarDecl>(cast<DeclRefExpr>(D)->getDecl())->getCanonicalDecl());
+    // Extract device pointer clause information.
+    for (const auto *C : Dir.getClausesOfKind<OMPIsDevicePtrClause>())
+      for (auto L : C->component_lists())
+        DevPointersMap[L.first].push_back(L.second);
+  }
+
+  /// Generate the base pointers, section pointers, sizes and map type
+  /// bits for the provided map type, map modifier, and expression components.
+  /// \a IsFirstComponent should be set to true if the provided set of
+  /// components is the first associated with a capture.
+  void generateInfoForComponentList(
+      OpenMPMapClauseKind MapType, OpenMPMapClauseKind MapTypeModifier,
+      OMPClauseMappableExprCommon::MappableExprComponentListRef Components,
+      MapBaseValuesArrayTy &BasePointers, MapValuesArrayTy &Pointers,
+      MapValuesArrayTy &Sizes, MapFlagsArrayTy &Types,
+      StructRangeMapTy &PartialStructs, bool IsFirstComponentList) const;
+
+  /// Generate all the base pointers, section pointers, sizes and map
+  /// types for the extracted mappable expressions. Also, for each item that
+  /// relates with a device pointer, a pair of the relevant declaration and
+  /// index where it occurs is appended to the device pointers info array.
+  void generateAllInfo(MapBaseValuesArrayTy &BasePointers,
+                       MapValuesArrayTy &Pointers, MapValuesArrayTy &Sizes,
+                       MapFlagsArrayTy &Types, StructRangeMapTy &PartialStructs,
+                       StructIndicesTy &StructIndices) const;
+
+  /// Generate the base pointers, section pointers, sizes and map types
+  /// associated to a given capture.
+  void generateInfoForCapture(const CapturedStmt::Capture *Cap,
+                              llvm::Value *Arg,
+                              MapBaseValuesArrayTy &BasePointers,
+                              MapValuesArrayTy &Pointers,
+                              MapValuesArrayTy &Sizes, MapFlagsArrayTy &Types,
+                              StructRangeMapTy &PartialStructs) const;
+
+  /// Generate the default map information for a given capture \a CI,
+  /// record field declaration \a RI and captured value \a CV.
+  void generateDefaultMapInfo(const CapturedStmt::Capture &CI,
+                              const FieldDecl &RI, llvm::Value *CV,
+                              MapBaseValuesArrayTy &CurBasePointers,
+                              MapValuesArrayTy &CurPointers,
+                              MapValuesArrayTy &CurSizes,
+                              MapFlagsArrayTy &CurMapTypes,
+                              MapLambdasArrayTy &CurLambdas);
+};
+
+enum OpenMPOffloadingReservedDeviceIDs {
+  /// Device ID if the device was not defined, runtime should get it
+  /// from environment variables in the spec.
+  OMP_DEVICEID_UNDEF = -1,
+};
+
+struct OMPMapArrays final {
+  MappableExprsHandler::MapBaseValuesArrayTy BasePointers;
+  MappableExprsHandler::MapValuesArrayTy Pointers;
+  MappableExprsHandler::MapValuesArrayTy Sizes;
+  MappableExprsHandler::MapFlagsArrayTy MapTypes;
+  MappableExprsHandler::MapLambdasArrayTy Lambdas;
+  MappableExprsHandler::MapValuesArrayTy KernelArgs;
+  const Expr *DeviceExpr = nullptr;
+  OMPMapArrays() = default;
+};
+
 class CGOpenMPRuntime {
 protected:
   CodeGenModule &CGM;
@@ -221,7 +449,17 @@ protected:
                                                 llvm::Function *&OutlinedFn,
                                                 llvm::Constant *&OutlinedFnID,
                                                 bool IsOffloadEntry,
-                                                const RegionCodeGenTy &CodeGen);
+                                                const RegionCodeGenTy &CodeGen,
+                                                unsigned CaptureLevel);
+
+  /// \brief Helper to emit outline 'target' directive.
+  /// \brief Returns a pointer to the outlined function.
+  /// \param D Directive to emit.
+  /// \param Name Name of the outlined function.
+  /// \param CodeGen Lambda codegen specific to an accelerator device.
+  virtual llvm::Function *
+  outlineTargetDirective(const OMPExecutableDirective &D, StringRef Name,
+                         const RegionCodeGenTy &CodeGen);
 
   /// \brief Emits object of ident_t type with info for source location.
   /// \param Flags Flags for OpenMP location.
@@ -289,6 +527,11 @@ public:
   void emitCall(CodeGenFunction &CGF, llvm::Value *Callee,
                 ArrayRef<llvm::Value *> Args = llvm::None,
                 SourceLocation Loc = SourceLocation()) const;
+
+  /// \brief For a given global variable VD, get the associated "declare target
+  /// link" pointer. If the pointer has not been created yet, this function
+  /// creates it.
+  llvm::GlobalValue *getOrCreateGlobalLinkPtr(const VarDecl *VD);
 
 private:
   /// \brief Default const ident_t object used for initialization of all other
@@ -738,33 +981,6 @@ private:
     RecordDecl *KmpTaskTQTyRD = nullptr;
     llvm::Value *TaskDupFn = nullptr;
   };
-  /// Emit task region for the task directive. The task region is emitted in
-  /// several steps:
-  /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
-  /// gtid, kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-  /// kmp_routine_entry_t *task_entry). Here task_entry is a pointer to the
-  /// function:
-  /// kmp_int32 .omp_task_entry.(kmp_int32 gtid, kmp_task_t *tt) {
-  ///   TaskFunction(gtid, tt->part_id, tt->shareds);
-  ///   return 0;
-  /// }
-  /// 2. Copy a list of shared variables to field shareds of the resulting
-  /// structure kmp_task_t returned by the previous call (if any).
-  /// 3. Copy a pointer to destructions function to field destructions of the
-  /// resulting structure kmp_task_t.
-  /// \param D Current task directive.
-  /// \param TaskFunction An LLVM function with type void (*)(i32 /*gtid*/, i32
-  /// /*part_id*/, captured_struct */*__context*/);
-  /// \param SharedsTy A type which contains references the shared variables.
-  /// \param Shareds Context with the list of shared variables from the \p
-  /// TaskFunction.
-  /// \param Data Additional data for task generation like tiednsee, final
-  /// state, list of privates etc.
-  TaskResultTy emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
-                            const OMPExecutableDirective &D,
-                            llvm::Value *TaskFunction, QualType SharedsTy,
-                            Address Shareds, const OMPTaskDataTy &Data);
-
   /// This contains all the decls which were not specified under declare target
   /// region, which are deferred for device code emission.
   /// If a decl is used in target region implicitly without specifying under
@@ -1122,10 +1338,12 @@ public:
   ///
   /// \param CGF Reference to current CodeGenFunction.
   /// \param Loc Clang source location.
+  /// \param DKind Kind of the directive for which the static finish is emitted.
   /// \param CoalescedDistSchedule Indicates if coalesced scheduling type is
   /// required.
   ///
   virtual void emitForStaticFinish(CodeGenFunction &CGF, SourceLocation Loc,
+                                   OpenMPDirectiveKind DKind,
                                    bool CoalescedDistSchedule = false);
 
   /// Call __kmpc_dispatch_next(
@@ -1146,6 +1364,16 @@ public:
                                    unsigned IVSize, bool IVSigned,
                                    Address IL, Address LB,
                                    Address UB, Address ST);
+
+  /// \brief Emit a call to reduce iteration variables for each conditional
+  /// lastprivate variable.
+  /// \param NumVars Number of conditional lastprivate variables.
+  /// \param Array Array of last update iteration values.
+  ///
+  virtual void emitReduceConditionalLastprivateCall(CodeGenFunction &CGF,
+                                                    SourceLocation Loc,
+                                                    llvm::Value *NumVars,
+                                                    llvm::Value *Array);
 
   /// \brief Emits call to void __kmpc_push_num_threads(ident_t *loc, kmp_int32
   /// global_tid, kmp_int32 num_threads) to generate code for 'num_threads'
@@ -1242,7 +1470,8 @@ public:
                             const OMPExecutableDirective &D,
                             llvm::Value *TaskFunction, QualType SharedsTy,
                             Address Shareds, const Expr *IfCond,
-                            const OMPTaskDataTy &Data);
+                            const OMPTaskDataTy &Data,
+                            OMPMapArrays *MapArrays = nullptr);
 
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
@@ -1428,7 +1657,8 @@ public:
                                           llvm::Function *&OutlinedFn,
                                           llvm::Constant *&OutlinedFnID,
                                           bool IsOffloadEntry,
-                                          const RegionCodeGenTy &CodeGen);
+                                          const RegionCodeGenTy &CodeGen,
+                                          unsigned CaptureLevel);
 
   /// Emit code that pushes the trip count of loops associated with constructs
   /// 'target teams distribute parallel for' and 'teams distribute parallel
@@ -1451,12 +1681,12 @@ public:
   /// \param Device Expression evaluated in device clause associated with the
   /// target directive, or null if no device clause is used.
   /// \param CapturedVars Values captured in the current region.
-  virtual void emitTargetCall(CodeGenFunction &CGF,
-                              const OMPExecutableDirective &D,
-                              llvm::Value *OutlinedFn,
-                              llvm::Value *OutlinedFnID, const Expr *IfCond,
-                              const Expr *Device,
-                              ArrayRef<llvm::Value *> CapturedVars);
+  virtual void
+  emitTargetCall(CodeGenFunction &CGF, const OMPExecutableDirective &D,
+                 llvm::Value *OutlinedFn, llvm::Value *OutlinedFnID,
+                 const Expr *IfCond, const Expr *Device,
+                 ArrayRef<llvm::Value *> CapturedVars, OMPMapArrays &MapArrays,
+                 const OMPTaskDataTy &Data);
 
   /// \brief Emit the target regions enclosed in \a GD function definition or
   /// the function itself in case it is a valid device function. Returns true if
@@ -1581,6 +1811,43 @@ public:
     }
     bool requiresDevicePointerInfo() { return RequiresDevicePointerInfo; }
   };
+
+  /// Emit task region for target tasks, target directive with depend clause.
+  /// The task region is emitted in several steps:
+  /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
+  /// gtid, kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
+  /// kmp_routine_entry_t *task_entry). Here task_entry is a pointer to the
+  /// function:
+  /// kmp_int32 .omp_task_entry.(kmp_int32 gtid, kmp_task_t *tt) {
+  ///   TaskFunction(gtid, tt->part_id, tt->shareds);
+  ///   return 0;
+  /// }
+  /// 2. Copy a list of shared variables to field shareds of the resulting
+  /// structure kmp_task_t returned by the previous call (if any).
+  /// 3. Copy a pointer to destructions function to field destructions of the
+  /// resulting structure kmp_task_t.
+  /// \param D Current task directive.
+  /// \param TaskFunction An LLVM function with type void (*)(i32 /*gtid*/, i32
+  /// /*part_id*/, captured_struct */*__context*/);
+  /// \param SharedsTy A type which contains references the shared variables.
+  /// \param Shareds Context with the list of shared variables from the \p
+  /// TaskFunction.
+  /// \param Data Additional data for task generation like tiednsee, final
+  /// state, list of privates etc.
+  TaskResultTy emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
+                            const OMPExecutableDirective &D,
+                            llvm::Value *TaskFunction, QualType SharedsTy,
+                            Address Shareds, const OMPTaskDataTy &Data,
+                            const OMPMapArrays &MapArrays,
+                            const TargetDataInfo &Info);
+
+  /// Generate arrays for later emission of code to implement target map clause
+  OMPMapArrays generateMapArrays(CodeGenFunction &CGF,
+                                 const OMPExecutableDirective &D,
+                                 ArrayRef<llvm::Value *> CapturedVars);
+
+  /// Emit map arrays
+  TargetDataInfo emitMapArrays(CodeGenFunction &CGF, OMPMapArrays &Maps);
 
   /// \brief Emit the target data mapping code associated with \a D.
   /// \param D Directive to emit.

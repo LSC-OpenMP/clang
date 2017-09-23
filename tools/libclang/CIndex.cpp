@@ -1980,6 +1980,8 @@ public:
   VisitOMPCancellationPointDirective(const OMPCancellationPointDirective *D);
   void VisitOMPCancelDirective(const OMPCancelDirective *D);
   void VisitOMPFlushDirective(const OMPFlushDirective *D);
+  void
+  VisitOMPLastprivateUpdateDirective(const OMPLastprivateUpdateDirective *D);
   void VisitOMPOrderedDirective(const OMPOrderedDirective *D);
   void VisitOMPAtomicDirective(const OMPAtomicDirective *D);
   void VisitOMPTargetDirective(const OMPTargetDirective *D);
@@ -2230,6 +2232,12 @@ void OMPClauseEnqueue::VisitOMPLastprivateClause(
   for (auto *E : C->private_copies()) {
     Visitor->AddStmt(E);
   }
+  for (auto *E : C->conditional_lastprivate_iterations()) {
+    Visitor->AddStmt(E);
+  }
+  for (auto *E : C->conditional_lastprivate_variables()) {
+    Visitor->AddStmt(E);
+  }
   for (auto *E : C->source_exprs()) {
     Visitor->AddStmt(E);
   }
@@ -2307,6 +2315,10 @@ OMPClauseEnqueue::VisitOMPCopyprivateClause(const OMPCopyprivateClause *C) {
   }
 }
 void OMPClauseEnqueue::VisitOMPFlushClause(const OMPFlushClause *C) {
+  VisitOMPClauseList(C);
+}
+void OMPClauseEnqueue::VisitOMPLastprivateUpdateClause(
+    const OMPLastprivateUpdateClause *C) {
   VisitOMPClauseList(C);
 }
 void OMPClauseEnqueue::VisitOMPDependClause(const OMPDependClause *C) {
@@ -2758,6 +2770,11 @@ void EnqueueVisitor::VisitOMPTaskgroupDirective(
 }
 
 void EnqueueVisitor::VisitOMPFlushDirective(const OMPFlushDirective *D) {
+  VisitOMPExecutableDirective(D);
+}
+
+void EnqueueVisitor::VisitOMPLastprivateUpdateDirective(
+    const OMPLastprivateUpdateDirective *D) {
   VisitOMPExecutableDirective(D);
 }
 
@@ -5009,6 +5026,8 @@ CXString clang_getCursorKindSpelling(enum CXCursorKind Kind) {
     return cxstring::createRef("OMPTaskgroupDirective");
   case CXCursor_OMPFlushDirective:
     return cxstring::createRef("OMPFlushDirective");
+  case CXCursor_OMPLastprivateUpdateDirective:
+    return cxstring::createRef("OMPLastprivateUpdateDirective");
   case CXCursor_OMPOrderedDirective:
     return cxstring::createRef("OMPOrderedDirective");
   case CXCursor_OMPAtomicDirective:
