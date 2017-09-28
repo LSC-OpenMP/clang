@@ -318,6 +318,8 @@ void OMPClauseProfiler::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 
 void OMPClauseProfiler::VisitOMPUseClause(const OMPUseClause *C) { }
 
+void OMPClauseProfiler::VisitOMPModuleClause(const OMPModuleClause *C) {}
+
 void OMPClauseProfiler::VisitOMPProcBindClause(const OMPProcBindClause *C) { }
 
 void OMPClauseProfiler::VisitOMPScheduleClause(const OMPScheduleClause *C) {

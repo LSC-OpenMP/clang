@@ -9250,10 +9250,24 @@ Address CGOpenMPRuntime::getParameterAddress(CodeGenFunction &CGF,
 }
 
 void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
-  const OMPCheckClause *C_check = S.getSingleClause<OMPCheckClause>();
+  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
 
-  // TODO(ciroceissler): add this funcionality in the future
-  if (C_check) {
-  //   llvm::errs() << "check!\n";
+  if (C) {
+    if (C->getUseKind() == OMPC_USE_hrw) {
+      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
+      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
+
+      if (c_module) {
+        this->TgtFPGAModule = c_module->getModuleNameInfo();
+      } else {
+        // TODO(ciroceissler): use OpenCL
+      }
+
+      // TODO(ciroceissler): add this funcionality in the future
+      // if (c_check) {
+      //   llvm::errs() << "check!\n";
+      // }
+    }
   }
+  const OMPCheckClause *C_check = S.getSingleClause<OMPCheckClause>();
 }

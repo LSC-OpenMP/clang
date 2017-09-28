@@ -1811,6 +1811,11 @@ void OMPClauseWriter::VisitOMPIfClause(OMPIfClause *C) {
   Record.AddSourceLocation(C->getLParenLoc());
 }
 
+void OMPClauseWriter::VisitOMPModuleClause(OMPModuleClause *C) {
+  Record.AddString(C->getModuleNameInfo());
+  Record.AddSourceLocation(C->getLParenLoc());
+}
+
 void OMPClauseWriter::VisitOMPFinalClause(OMPFinalClause *C) {
   Record.AddStmt(C->getCondition());
   Record.AddSourceLocation(C->getLParenLoc());
