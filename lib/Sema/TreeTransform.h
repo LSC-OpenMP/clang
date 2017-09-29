@@ -1681,12 +1681,11 @@ public:
   ///
   /// By default, performs semantic analysis to build the new statement.
   /// Subclasses may override this routine to provide different behavior.
-  OMPClause *RebuildOMPDeviceClause(Expr *Device, std::string Name, 
-                                    SourceLocation StartLoc,
+  OMPClause *RebuildOMPDeviceClause(Expr *Device, SourceLocation StartLoc,
                                     SourceLocation LParenLoc,
                                     SourceLocation EndLoc) {
-    return getSema().ActOnOpenMPDeviceClause(Device, StringRef(Name),
-                                             StartLoc, LParenLoc, EndLoc);
+    return getSema().ActOnOpenMPDeviceClause(Device, StartLoc, LParenLoc,
+                                             EndLoc);
   }
 
   /// \brief Build a new OpenMP 'map' clause.
@@ -8244,7 +8243,7 @@ TreeTransform<Derived>::TransformOMPDeviceClause(OMPDeviceClause *C) {
   if (E.isInvalid())
     return nullptr;
   return getDerived().RebuildOMPDeviceClause(
-      E.get(), C->getName(), C->getLocStart(), C->getLParenLoc(),
+      E.get(), C->getLocStart(), C->getLParenLoc(),
       C->getLocEnd());
 }
 

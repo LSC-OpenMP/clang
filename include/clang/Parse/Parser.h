@@ -2589,11 +2589,6 @@ private:
   ///
   OMPClause *ParseOpenMPVarListClause(OpenMPDirectiveKind DKind,
                                       OpenMPClauseKind Kind);
-  /// \brief Parses clause of device kind \a Kind.
-  ///
-  /// \param Kind Kind of device clause.
-  ///
-  OMPClause *ParseOpenMPDeviceClause(OpenMPClauseKind Kind);
   /// \brief Parses clause with accelerator args.
   ///
   /// \param Kind Kind of current clause.

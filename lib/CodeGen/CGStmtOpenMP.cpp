@@ -3974,11 +3974,8 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
 
   // Check if we have any device clause associated with the directive.
   const Expr *Device = nullptr;
-  std::string Name;
-  if (auto *C = S.getSingleClause<OMPDeviceClause>()) {
+  if (auto *C = S.getSingleClause<OMPDeviceClause>())
     Device = C->getDevice();
-    Name = C->getName();
-  }
 
   // Check if we have an if clause whose conditional always evaluates to false
   // or if we do not have any targets specified. If so the target region is not
@@ -4022,7 +4019,7 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
   llvm::SmallVector<llvm::Value *, 16> CapturedVars;
   CGF.GenerateOpenMPCapturedVars(CS, CapturedVars);
   CGM.getOpenMPRuntime().emitTargetCall(CGF, S, Fn, FnID, IfCond, Device,
-                                        Name, CapturedVars);
+                                        CapturedVars);
 }
 
 void TargetCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,

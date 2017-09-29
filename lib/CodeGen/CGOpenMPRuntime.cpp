@@ -7745,7 +7745,6 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
                                      llvm::Value *OutlinedFn,
                                      llvm::Value *OutlinedFnID,
                                      const Expr *IfCond, const Expr *Device,
-                                     std::string Name,
                                      ArrayRef<llvm::Value *> CapturedVars) {
   if (!CGF.HaveInsertPoint())
     return;
@@ -7883,7 +7882,7 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
   // Fill up the pointer arrays and transfer execution to the device.
   auto &&ThenGen = [&Ctx, &BasePointers, &Pointers, &Sizes, &MapTypes, Device,
                     OutlinedFnID, OffloadError, OffloadErrorQType, &D,
-                    hasNowait, Name](CodeGenFunction &CGF, PrePostActionTy &) {
+                    hasNowait](CodeGenFunction &CGF, PrePostActionTy &) {
     auto &RT = CGF.CGM.getOpenMPRuntime();
     // Emit the offloading arrays.
     TargetDataInfo Info;
