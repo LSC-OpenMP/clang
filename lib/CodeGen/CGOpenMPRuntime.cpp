@@ -746,7 +746,7 @@ enum OpenMPRTLFunction {
   // *host_ptr, int32_t arg_num, void** args_base, void **args, size_t
   // *arg_sizes, int64_t *arg_types, int32_t num_teams, int32_t thread_limit);
   OMPRTL__tgt_target_teams_nowait,
-  // Call to int32_t __tgt_target_fpga(int64_t device_id, void *module);
+  // Call to int32_t __tgt_target_fpga(void *module);
   OMPRTL__tgt_target_fpga,
   // Call to void __tgt_register_lib(__tgt_bin_desc *desc);
   OMPRTL__tgt_register_lib,
@@ -2232,8 +2232,8 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
     break;
   }
   case OMPRTL__tgt_target_fpga: {
-    // Build int32_t __tgt_target_fpga(int64_t device_id, void *module);
-    llvm::Type *TypeParams[] = {CGM.Int64Ty, CGM.VoidPtrTy};
+    // Build int32_t __tgt_target_fpga(void *module);
+    llvm::Type *TypeParams[] = {CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_fpga");
@@ -3808,20 +3808,8 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   if (OffloadEntriesInfoManager.empty())
     return;
 
-  if (!CGM.getLangOpts().OpenMPIsDevice &&
-      CGM.getLangOpts().OMPTargetTriples.empty())
+  if (!CGM.getLangOpts().OpenMPIsDevice)
     return;
-
-  // Create constant string with the name.
-  llvm::Constant *StrPtrInit =
-      llvm::ConstantDataArray::getString(C, this->TgtFPGAModule);
-
-  llvm::GlobalVariable *Str =
-      new llvm::GlobalVariable(M, StrPtrInit->getType(), /*isConstant=*/true,
-                               llvm::GlobalValue::InternalLinkage, StrPtrInit,
-                               ".omp_offloading.configuration_module");
-  Str->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-  llvm::Constant *StrPtr = llvm::ConstantExpr::getBitCast(Str, CGM.Int8PtrTy);
 
   // Decide linkage type of the entry struct by looking at the linkage type of
   // the variable. By default the linkage is Link-Once.
@@ -3846,7 +3834,6 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   ConstantInitBuilder EntryBuilder(CGM);
   auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
   EntryInit.addInt(CGM.Int32Ty, sub_target_id);
-  EntryInit.add(StrPtr);
   SmallString<128> EntryGblName(".omp_offloading.configuration.var");
   llvm::GlobalVariable *Entry =
       EntryInit.finishAndCreateGlobal(EntryGblName, Align,
@@ -3876,6 +3863,25 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
   Str->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
   llvm::Constant *StrPtr = llvm::ConstantExpr::getBitCast(Str, CGM.Int8PtrTy);
 
+  // Create constant string with the module.
+  std::string str_module;
+
+  if (!this->TgtFPGAModule.empty()) {
+    str_module = this->TgtFPGAModule.front();
+    this->TgtFPGAModule.pop();
+  }
+
+  llvm::Constant *StrPtrModuleInit =
+      llvm::ConstantDataArray::getString(C, str_module);
+
+  llvm::GlobalVariable *StrModule =
+      new llvm::GlobalVariable(M, StrPtrModuleInit->getType(), /*isConstant=*/true,
+                               llvm::GlobalValue::InternalLinkage, StrPtrModuleInit,
+                               ".omp_offloading.entry_module");
+  StrModule->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+  llvm::Constant *StrModulePtr =
+      llvm::ConstantExpr::getBitCast(StrModule, CGM.Int8PtrTy);
+
   // Decide linkage type of the entry struct by looking at the linkage type of
   // the variable. By default the linkage is Link-Once.
   auto EntryLinkage = llvm::GlobalValue::WeakAnyLinkage;
@@ -3889,6 +3895,7 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
   auto EntryInit = EntryBuilder.beginStruct(TgtOffloadEntryType);
   EntryInit.add(AddrPtr);
   EntryInit.add(StrPtr);
+  EntryInit.add(StrModulePtr);
   EntryInit.addInt(CGM.SizeTy, Size);
   EntryInit.addInt(CGM.Int32Ty, Flags);
   EntryInit.addInt(CGM.Int32Ty, 0);
@@ -4136,7 +4143,6 @@ QualType CGOpenMPRuntime::getTgtConfigurationyQTy() {
     RD->startDefinition();
     addFieldToRecordDecl(
         C, RD, C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/true));
-    addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
     RD->completeDefinition();
     TgtConfigurationQTy = C.getRecordType(RD);
   }
@@ -4151,6 +4157,7 @@ QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
   //   void      *addr;       // Pointer to the offload entry info.
   //                          // (function or global)
   //   char      *name;       // Name of the function or global.
+  //   char      *module;     // Name of the module to offloading if is an FPGA.
   //   size_t     size;       // Size of the entry info (0 if it a function).
   //   int32_t    flags;      // Flags associated with the entry, e.g. 'link'.
   //   int32_t    reserved;   // Reserved, to use by the runtime library.
@@ -4160,6 +4167,7 @@ QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
     auto *RD = C.buildImplicitRecord("__tgt_offload_entry");
     RD->startDefinition();
     addFieldToRecordDecl(C, RD, C.VoidPtrTy);
+    addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
     addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
     addFieldToRecordDecl(C, RD, C.getSizeType());
     addFieldToRecordDecl(
@@ -7913,24 +7921,6 @@ void CGOpenMPRuntime::emitTargetCall(CodeGenFunction &CGF,
     auto *NumTeams = emitNumTeamsClauseForTargetDirective(RT, CGF, D);
     auto *ThreadLimit = emitThreadLimitClauseForTargetDirective(RT, CGF, D);
 
-    // Create constant string with the name.
-    llvm::LLVMContext &C = CGF.CGM.getModule().getContext();
-    llvm::Module &M = CGF.CGM.getModule();
-    llvm::Constant *StrPtrInit =
-        llvm::ConstantDataArray::getString(C, Name);
-
-    llvm::GlobalVariable *Str =
-        new llvm::GlobalVariable(M, StrPtrInit->getType(), /*isConstant=*/true,
-                                 llvm::GlobalValue::InternalLinkage, StrPtrInit);
-    Str->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-    llvm::Value *StrPtr = llvm::ConstantExpr::getBitCast(Str, CGF.CGM.Int8PtrTy);
-
-    llvm::Value *FPGA_Args[] = {DeviceID, StrPtr};
-
-    CGF.EmitRuntimeCall(
-        RT.createRuntimeFunction(OMPRTL__tgt_target_fpga),
-        FPGA_Args);
-
     // If we have NumTeams defined this means that we have an enclosed teams
     // region. Therefore we also expect to have ThreadLimit defined. These two
     // values should be defined in the presence of a teams directive, regardless
@@ -9250,24 +9240,30 @@ Address CGOpenMPRuntime::getParameterAddress(CodeGenFunction &CGF,
 }
 
 void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
-  const OMPUseClause *C = S.getSingleClause<OMPUseClause>();
 
-  if (C) {
-    if (C->getUseKind() == OMPC_USE_hrw) {
+  // check if is an FPGA device
+  auto &Triple = CGM.getTarget().getTargetOpts().Triple;
+  if ( (Triple != "smartnic") && (Triple != "harp") && (Triple != "harpsim") ) {
+    return;
+  }
+
+  const OMPUseClause *c_use = S.getSingleClause<OMPUseClause>();
+  if (c_use) {
+    if (c_use->getUseKind() == OMPC_USE_hrw) {
       const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
       const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
 
       if (c_module) {
-        this->TgtFPGAModule = c_module->getModuleNameInfo();
+        this->TgtFPGAModule.push(c_module->getModuleNameInfo());
       } else {
         // TODO(ciroceissler): use OpenCL
+        llvm::errs() << "OpenCL is not available!\n";
       }
 
-      // TODO(ciroceissler): add this funcionality in the future
-      // if (c_check) {
-      //   llvm::errs() << "check!\n";
-      // }
+      if (c_check) {
+        // TODO(ciroceissler): add this funcionality in the future
+        llvm::errs() << "check clause is not available!\n";
+      }
     }
   }
-  const OMPCheckClause *C_check = S.getSingleClause<OMPCheckClause>();
 }

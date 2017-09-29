@@ -24,6 +24,7 @@
 #include "llvm/ADT/StringMap.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/ValueHandle.h"
+#include <queue>
 
 namespace llvm {
 class ArrayType;
@@ -370,13 +371,13 @@ private:
   QualType KmpDimTy;
   /// \brief Type struct __tgt_configuration{
   ///   int32_t  sub_target_id;  // sub_target id.
-  ///   char    *module;         // FPGA module name.
   /// };
   QualType TgtConfigurationQTy;
   /// \brief Type struct __tgt_offload_entry{
   ///   void      *addr;       // Pointer to the offload entry info.
   ///                          // (function or global)
   ///   char      *name;       // Name of the function or global.
+  ///   char      *module;     // Name of the module to offloading if is an FPGA.
   ///   size_t     size;       // Size of the entry info (0 if it a function).
   /// };
   QualType TgtOffloadEntryQTy;
@@ -402,7 +403,7 @@ private:
   /// };
   QualType TgtBinaryDescriptorQTy;
   /// \brief Target FPGA Module name
-  std::string TgtFPGAModule;
+  std::queue<std::string> TgtFPGAModule;
   /// \brief Entity that registers the offloading constants that were emitted so
   /// far.
   class OffloadEntriesInfoManagerTy {
