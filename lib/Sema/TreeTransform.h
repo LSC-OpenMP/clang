@@ -1395,9 +1395,12 @@ public:
                                            OpenMPDirectiveKind CancelRegion,
                                            ArrayRef<OMPClause *> Clauses,
                                            Stmt *AStmt, SourceLocation StartLoc,
-                                           SourceLocation EndLoc) {
+                                           SourceLocation EndLoc,
+                                           bool HasDependClause) {
+    bool requiresImplicitMaps = (Kind == OMPD_target && HasDependClause);
     return getSema().ActOnOpenMPExecutableDirective(
-        Kind, DirName, CancelRegion, Clauses, AStmt, StartLoc, EndLoc);
+        Kind, DirName, CancelRegion, Clauses, AStmt, StartLoc, EndLoc,
+        requiresImplicitMaps);
   }
 
   /// \brief Build a new OpenMP 'if' clause.
@@ -1662,6 +1665,18 @@ public:
                                    SourceLocation EndLoc) {
     return getSema().ActOnOpenMPFlushClause(VarList, StartLoc, LParenLoc,
                                             EndLoc);
+  }
+
+  /// \brief Build a new OpenMP 'lastprivate_update' pseudo clause.
+  ///
+  /// By default, performs semantic analysis to build the new OpenMP clause.
+  /// Subclasses may override this routine to provide different behavior.
+  OMPClause *RebuildOMPLastprivateUpdateClause(ArrayRef<Expr *> VarList,
+                                               SourceLocation StartLoc,
+                                               SourceLocation LParenLoc,
+                                               SourceLocation EndLoc) {
+    return getSema().ActOnOpenMPLastprivateUpdateClause(VarList, StartLoc,
+                                                        LParenLoc, EndLoc);
   }
 
   /// \brief Build a new OpenMP 'depend' pseudo clause.
@@ -7264,6 +7279,7 @@ StmtResult TreeTransform<Derived>::TransformOMPExecutableDirective(
   llvm::SmallVector<OMPClause *, 16> TClauses;
   ArrayRef<OMPClause *> Clauses = D->clauses();
   TClauses.reserve(Clauses.size());
+  bool HasDependClause = D->hasClausesOfKind<OMPDependClause>();
   for (ArrayRef<OMPClause *>::iterator I = Clauses.begin(), E = Clauses.end();
        I != E; ++I) {
     if (*I) {
@@ -7279,7 +7295,8 @@ StmtResult TreeTransform<Derived>::TransformOMPExecutableDirective(
   StmtResult AssociatedStmt;
   if (D->hasAssociatedStmt() && D->getAssociatedStmt()) {
     getDerived().getSema().ActOnOpenMPRegionStart(D->getDirectiveKind(),
-                                                  /*CurScope=*/nullptr);
+                                                  /*CurScope=*/nullptr,
+                                                  HasDependClause);
     StmtResult Body;
     {
       Sema::CompoundScopeRAII CompoundScope(getSema());
@@ -7311,7 +7328,7 @@ StmtResult TreeTransform<Derived>::TransformOMPExecutableDirective(
 
   return getDerived().RebuildOMPExecutableDirective(
       D->getDirectiveKind(), DirName, CancelRegion, TClauses,
-      AssociatedStmt.get(), D->getLocStart(), D->getLocEnd());
+      AssociatedStmt.get(), D->getLocStart(), D->getLocEnd(), HasDependClause);
 }
 
 template <typename Derived>
@@ -7506,6 +7523,17 @@ TreeTransform<Derived>::TransformOMPFlushDirective(OMPFlushDirective *D) {
   DeclarationNameInfo DirName;
   getDerived().getSema().StartOpenMPDSABlock(OMPD_flush, DirName, nullptr,
                                              D->getLocStart());
+  StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
+  getDerived().getSema().EndOpenMPDSABlock(Res.get());
+  return Res;
+}
+
+template <typename Derived>
+StmtResult TreeTransform<Derived>::TransformOMPLastprivateUpdateDirective(
+    OMPLastprivateUpdateDirective *D) {
+  DeclarationNameInfo DirName;
+  getDerived().getSema().StartOpenMPDSABlock(OMPD_lastprivate_update, DirName,
+                                             nullptr, D->getLocStart());
   StmtResult Res = getDerived().TransformOMPExecutableDirective(D);
   getDerived().getSema().EndOpenMPDSABlock(Res.get());
   return Res;
@@ -8218,6 +8246,21 @@ OMPClause *TreeTransform<Derived>::TransformOMPFlushClause(OMPFlushClause *C) {
   }
   return getDerived().RebuildOMPFlushClause(Vars, C->getLocStart(),
                                             C->getLParenLoc(), C->getLocEnd());
+}
+
+template <typename Derived>
+OMPClause *TreeTransform<Derived>::TransformOMPLastprivateUpdateClause(
+    OMPLastprivateUpdateClause *C) {
+  llvm::SmallVector<Expr *, 16> Vars;
+  Vars.reserve(C->varlist_size());
+  for (auto *VE : C->varlists()) {
+    ExprResult EVar = getDerived().TransformExpr(cast<Expr>(VE));
+    if (EVar.isInvalid())
+      return nullptr;
+    Vars.push_back(EVar.get());
+  }
+  return getDerived().RebuildOMPLastprivateUpdateClause(
+      Vars, C->getLocStart(), C->getLParenLoc(), C->getLocEnd());
 }
 
 template <typename Derived>
