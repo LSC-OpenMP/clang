@@ -4075,12 +4075,14 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   // alignment.
   auto Align = CharUnits::fromQuantity(1);
 
-  auto &Triple = CGM.getTarget().getTargetOpts().Triple;
+  auto &Triple = CGM.getTarget().getTriple();
 
-  if (Triple == "smartnic") {
+  if (Triple.isSmartNIC()) {
     sub_target_id = 9001;
-  } else if (Triple == "harp") {
+  } else if (Triple.isHarp()) {
     sub_target_id = 9002;
+  } else if (Triple.isSparkEnvironment()) {
+    sub_target_id = 9003;
   } else {
     sub_target_id = 0;
   }
