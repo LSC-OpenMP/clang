@@ -4085,9 +4085,6 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
     sub_target_id = 0;
   }
 
-  llvm::errs() << "sub_target_id: " << sub_target_id << "\n";
-  llvm::errs() << "triple       : " << Triple << "\n";
-
   ConstantInitBuilder EntryBuilder(CGM);
   auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
   EntryInit.addInt(CGM.Int32Ty, sub_target_id);
