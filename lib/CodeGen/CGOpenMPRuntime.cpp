@@ -4083,6 +4083,8 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
     sub_target_id = 9002;
   } else if (Triple.isSparkEnvironment()) {
     sub_target_id = 9003;
+  } else if (Triple.isMPIEnvironment()) {
+    sub_target_id = 9004;
   } else {
     sub_target_id = 0;
   }
