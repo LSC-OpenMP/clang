@@ -53,14 +53,14 @@ enum OpenMPRTLFunctionNVPTX {
   OMPRTL_NVPTX__kmpc_kernel_parallel,
   /// \brief Call to void __kmpc_kernel_end_parallel();
   OMPRTL_NVPTX__kmpc_kernel_end_parallel,
-  /// \brief Call to bool __kmpc_kernel_convergent_parallel(void *buffer, bool
-  /// *IsFinal, kmpc_int32 *LaneSource);
+  /// \brief Call to bool __kmpc_kernel_convergent_parallel(void *buffer,
+  /// uint32_t Mask, bool *IsFinal, kmpc_int32 *LaneSource);
   OMPRTL_NVPTX__kmpc_kernel_convergent_parallel,
   /// \brief Call to void __kmpc_kernel_end_convergent_parallel(void *buffer);
   OMPRTL_NVPTX__kmpc_kernel_end_convergent_parallel,
   /// \brief Call to bool __kmpc_kernel_convergent_simd(
-  /// void *buffer, bool *IsFinal, kmpc_int32 *LaneSource, kmpc_int32 *LaneId,
-  /// kmpc_int32 *NumLanes);
+  /// void *buffer, uint32_t Mask, bool *IsFinal, kmpc_int32 *LaneSource,
+  /// kmpc_int32 *LaneId, kmpc_int32 *NumLanes);
   OMPRTL_NVPTX__kmpc_kernel_convergent_simd,
   /// \brief Call to void __kmpc_kernel_end_convergent_simd(void *buffer);
   OMPRTL_NVPTX__kmpc_kernel_end_convergent_simd,
@@ -907,7 +907,11 @@ static bool onlyOneStmt(const Stmt *Body) {
 // check for inner (nested) SPMD teams construct, if any
 static bool hasNestedTeamsSPMDDirective(const OMPExecutableDirective &D,
                                         bool tryCombineAggressively) {
-  const CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
+  const auto *PCS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>() &&
+      isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+    PCS = cast<CapturedStmt>(PCS->getCapturedStmt());
+  const CapturedStmt &CS = *PCS;
 
   if (auto *NestedDir = dyn_cast_or_null<OMPExecutableDirective>(
           ignoreCompoundStmts(CS.getCapturedStmt()))) {
@@ -941,7 +945,11 @@ static bool hasNestedTeamsSPMDDirective(const OMPExecutableDirective &D,
 static const OMPExecutableDirective *
 getNestedTeamsSPMDDirective(const OMPExecutableDirective &D,
                             bool tryCombineAggressively) {
-  const CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
+  const auto *PCS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>() &&
+      isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+    PCS = cast<CapturedStmt>(PCS->getCapturedStmt());
+  const CapturedStmt &CS = *PCS;
 
   if (auto *NestedDir = dyn_cast_or_null<OMPExecutableDirective>(
           ignoreCompoundStmts(CS.getCapturedStmt()))) {
@@ -1234,7 +1242,10 @@ void CGOpenMPRuntimeNVPTX::TargetKernelProperties::setMasterSharedDataSize() {
     return;
 
   auto &C = CGM.getContext();
-  auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+  const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>() &&
+      isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+    CS = cast<CapturedStmt>(CS->getCapturedStmt());
 
   // First get private variables inferred from the target directive's clauses.
   llvm::DenseSet<const VarDecl *> PrivateDecls;
@@ -1303,7 +1314,10 @@ void CGOpenMPRuntimeNVPTX::TargetKernelProperties::setMasterSharedDataSize() {
 
   llvm::SmallSet<const VarDecl *, 32> AlreadySharedDecls;
   for (auto *Dir : DSDirectives) {
-    const CapturedStmt *CS = cast<CapturedStmt>(Dir->getAssociatedStmt());
+    const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+    if (Dir->hasClausesOfKind<OMPDependClause>() &&
+        isOpenMPTargetExecutionDirective(Dir->getDirectiveKind()))
+      CS = cast<CapturedStmt>(CS->getCapturedStmt());
     const RecordDecl *RD = CS->getCapturedRecordDecl();
     auto CurField = RD->field_begin();
     auto CurCap = CS->capture_begin();
@@ -1404,7 +1418,11 @@ getTeamsDirective(const CodeGenModule &CGM, const OMPExecutableDirective &D) {
   switch (D.getDirectiveKind()) {
   case OMPD_target:
   case OMPD_target_simd: {
-    const CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
+    const auto *PCS = cast<CapturedStmt>(D.getAssociatedStmt());
+    if (D.hasClausesOfKind<OMPDependClause>() &&
+        isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+      PCS = cast<CapturedStmt>(PCS->getCapturedStmt());
+    const CapturedStmt &CS = *PCS;
     if (auto *NestedDir = dyn_cast_or_null<OMPExecutableDirective>(
             ignoreCompoundStmts(CS.getCapturedStmt())))
       return NestedDir;
@@ -1842,8 +1860,8 @@ CGOpenMPRuntimeNVPTX::createNVPTXRuntimeFunction(unsigned Function) {
   }
   case OMPRTL_NVPTX__kmpc_kernel_convergent_parallel: {
     /// \brief Call to bool __kmpc_kernel_convergent_parallel(
-    /// void *buffer, bool *IsFinal, kmpc_int32 *LaneSource);
-    llvm::Type *TypeParams[] = {CGM.Int8PtrTy, CGM.Int8PtrTy,
+    /// void *buffer, uint32_t Mask, bool *IsFinal, kmpc_int32 *LaneSource);
+    llvm::Type *TypeParams[] = {CGM.Int8PtrTy, CGM.Int32Ty, CGM.Int8PtrTy,
                                 CGM.Int32Ty->getPointerTo()};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(llvm::Type::getInt1Ty(CGM.getLLVMContext()),
@@ -1863,11 +1881,14 @@ CGOpenMPRuntimeNVPTX::createNVPTXRuntimeFunction(unsigned Function) {
   }
   case OMPRTL_NVPTX__kmpc_kernel_convergent_simd: {
     /// \brief Call to bool __kmpc_kernel_convergent_simd(
-    /// void *buffer, bool *IsFinal, kmpc_int32 *LaneSource, kmpc_int32 *LaneId,
-    /// kmpc_int32 *NumLanes);
-    llvm::Type *TypeParams[] = {
-        CGM.Int8PtrTy, CGM.Int8PtrTy, CGM.Int32Ty->getPointerTo(),
-        CGM.Int32Ty->getPointerTo(), CGM.Int32Ty->getPointerTo()};
+    /// void *buffer, uint32_t Mask, bool *IsFinal, kmpc_int32 *LaneSource,
+    /// kmpc_int32 *LaneId, kmpc_int32 *NumLanes);
+    llvm::Type *TypeParams[] = {CGM.Int8PtrTy,
+                                CGM.Int32Ty,
+                                CGM.Int8PtrTy,
+                                CGM.Int32Ty->getPointerTo(),
+                                CGM.Int32Ty->getPointerTo(),
+                                CGM.Int32Ty->getPointerTo()};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(llvm::Type::getInt1Ty(CGM.getLLVMContext()),
                                 TypeParams, /*isVarArg*/ false);
@@ -2322,7 +2343,10 @@ CGOpenMPRuntimeNVPTX::outlineTargetDirective(const OMPExecutableDirective &D,
   //
   CodeGenFunction WrapperCGF(CGM, /*suppressNewContext=*/true);
   auto &Ctx = WrapperCGF.getContext();
-  const CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
+  const auto *PCS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>())
+    PCS = cast<CapturedStmt>(PCS->getCapturedStmt());
+  const CapturedStmt &CS = *PCS;
   // When a target region has a depend clause, generate a new task
   // that contains the target region invocation, instead of generating it in
   // place. The task will take care of the depend logic.
@@ -2903,7 +2927,10 @@ llvm::Value *CGOpenMPRuntimeNVPTX::emitParallelOutlinedFunction(
     // Call to a parallel that is not combined with a teams or target
     // directive (non SPMD).
     // This could also be a nested 'parallel' in an SPMD region.
-    const CapturedStmt *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+    const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+    if (D.hasClausesOfKind<OMPDependClause>() &&
+        isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+      CS = cast<CapturedStmt>(CS->getCapturedStmt());
     CodeGenFunction CGF(CGM, true);
     bool HasCancel = false;
     if (auto *OPD = dyn_cast<OMPParallelDirective>(&D))
@@ -2941,7 +2968,10 @@ llvm::Value *CGOpenMPRuntimeNVPTX::emitSimdOutlinedFunction(
     const RegionCodeGenTy &CodeGen) {
   llvm::Function *OutlinedFun = nullptr;
 
-  const CapturedStmt *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+  const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>() &&
+      isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+    CS = cast<CapturedStmt>(CS->getCapturedStmt());
 
   // Save the current parallel context because it may be overwritten by the
   // innermost regions.
@@ -3077,7 +3107,10 @@ void CGOpenMPRuntimeNVPTX::createDataSharingInfo(CodeGenFunction &CGF) {
   llvm::SmallSet<const VarDecl *, 32> AlreadySharedDecls;
   ASTContext &Ctx = CGF.getContext();
   for (auto *Dir : CapturedDirs) {
-    const CapturedStmt *CS = cast<CapturedStmt>(Dir->getAssociatedStmt());
+    const auto *CS = cast<CapturedStmt>(Dir->getAssociatedStmt());
+    if (Dir->hasClausesOfKind<OMPDependClause>() &&
+        isOpenMPTargetExecutionDirective(Dir->getDirectiveKind()))
+      CS = cast<CapturedStmt>(CS->getCapturedStmt());
     const RecordDecl *RD = CS->getCapturedRecordDecl();
     auto CurField = RD->field_begin();
     auto CurCap = CS->capture_begin();
@@ -3626,7 +3659,11 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
     llvm::Function &OutlinedParallelFn, const OMPExecutableDirective &D,
     const Decl *CurrentContext, bool IsSimd) {
   auto &Ctx = CGM.getContext();
-  const CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
+  const auto *PCS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>() &&
+      isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+    PCS = cast<CapturedStmt>(PCS->getCapturedStmt());
+  const CapturedStmt &CS = *PCS;
 
   // Create a function that takes as argument the source lane.
   FunctionArgList WrapperArgs;
@@ -4027,8 +4064,7 @@ void CGOpenMPRuntimeNVPTX::emitGenericParallelCall(
   createDataSharingPerFunctionInfrastructure(CGF);
 
   auto *RTLoc = emitUpdateLocation(CGF, Loc);
-  auto &&L0ParallelGen = [this, WFn, &CapturedVars](CodeGenFunction &CGF,
-                                                    PrePostActionTy &) {
+  auto &&L0ParallelGen = [this, WFn](CodeGenFunction &CGF, PrePostActionTy &) {
     CGBuilderTy &Bld = CGF.Builder;
 
     auto ID = Bld.CreateBitOrPointerCast(WFn, CGM.Int8PtrTy);
@@ -4061,6 +4097,9 @@ void CGOpenMPRuntimeNVPTX::emitGenericParallelCall(
     Address WorkSource =
         CGF.CreateTempAlloca(CGF.Int32Ty, CharUnits::fromQuantity(4),
                              /*Name*/ "work_source");
+    Address ConvergentMask =
+        CGF.CreateTempAlloca(CGF.Int32Ty, CharUnits::fromQuantity(4),
+                             /*Name*/ "convergent_mask");
     llvm::APInt TaskBufferSize(/*numBits=*/32, TASK_STATE_SIZE);
     auto TaskBufferTy = Ctx.getConstantArrayType(
         Ctx.CharTy, TaskBufferSize, ArrayType::Normal, /*IndexTypeQuals=*/0);
@@ -4077,13 +4116,18 @@ void CGOpenMPRuntimeNVPTX::emitGenericParallelCall(
 
     // Initialize WorkSource before each call to the parallel region.
     Bld.CreateStore(Bld.getInt32(/*C=*/-1), WorkSource);
+    Bld.CreateStore(getNVPTXWarpActiveThreadsMask(CGF), ConvergentMask);
 
     CGF.EmitBranch(DoBodyBB);
     CGF.EmitBlock(DoBodyBB);
     auto ArrayDecay = Bld.CreateConstInBoundsGEP2_32(
         llvm::ArrayType::get(CGM.Int8Ty, TASK_STATE_SIZE), TaskState,
         /*Idx0=*/0, /*Idx1=*/0);
-    llvm::Value *Args[] = {ArrayDecay, IsFinal.getPointer(),
+    auto *MaskVal = CGF.EmitLoadOfScalar(
+        ConvergentMask, /*Volatile=*/false,
+        Ctx.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/false),
+        SourceLocation());
+    llvm::Value *Args[] = {ArrayDecay, MaskVal, IsFinal.getPointer(),
                            WorkSource.getPointer()};
     llvm::Value *IsActive =
         CGF.EmitRuntimeCall(createNVPTXRuntimeFunction(
@@ -4218,10 +4262,7 @@ void CGOpenMPRuntimeNVPTX::emitSimdCall(CodeGenFunction &CGF,
   // function.
   createDataSharingPerFunctionInfrastructure(CGF);
 
-  auto *RTLoc = emitUpdateLocation(CGF, Loc);
-
-  auto &&L1SimdGen = [this, WFn, RTLoc, Loc](CodeGenFunction &CGF,
-                                             PrePostActionTy &) {
+  auto &&L1SimdGen = [this, WFn](CodeGenFunction &CGF, PrePostActionTy &) {
     CGBuilderTy &Bld = CGF.Builder;
     clang::ASTContext &Ctx = CGF.getContext();
 
@@ -4243,6 +4284,9 @@ void CGOpenMPRuntimeNVPTX::emitSimdCall(CodeGenFunction &CGF,
     auto TaskState = CGF.CreateMemTemp(TaskBufferTy, CharUnits::fromQuantity(8),
                                        /*Name=*/"task_state")
                          .getPointer();
+    auto ConvergentMask =
+        CGF.CreateTempAlloca(CGF.Int32Ty, CharUnits::fromQuantity(4),
+                             /*Name*/ "convergent_mask");
     CGF.InitTempAlloca(IsFinal, Bld.getInt8(/*C=*/0));
     CGF.InitTempAlloca(WorkSource, Bld.getInt32(/*C=*/-1));
 
@@ -4253,15 +4297,20 @@ void CGOpenMPRuntimeNVPTX::emitSimdCall(CodeGenFunction &CGF,
 
     // Initialize WorkSource before each call to the simd region.
     Bld.CreateStore(Bld.getInt32(/*C=*/-1), WorkSource);
+    Bld.CreateStore(getNVPTXWarpActiveThreadsMask(CGF), ConvergentMask);
 
     CGF.EmitBranch(DoBodyBB);
     CGF.EmitBlock(DoBodyBB);
     auto ArrayDecay = Bld.CreateConstInBoundsGEP2_32(
         llvm::ArrayType::get(CGM.Int8Ty, SIMD_STATE_SIZE), TaskState,
         /*Idx0=*/0, /*Idx1=*/0);
-    llvm::Value *Args[] = {ArrayDecay, IsFinal.getPointer(),
-                           WorkSource.getPointer(), LaneId.getPointer(),
-                           NumLanes.getPointer()};
+    auto *MaskVal = CGF.EmitLoadOfScalar(
+        ConvergentMask, /*Volatile=*/false,
+        Ctx.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/false),
+        SourceLocation());
+    llvm::Value *Args[] = {ArrayDecay,           MaskVal,
+                           IsFinal.getPointer(), WorkSource.getPointer(),
+                           LaneId.getPointer(),  NumLanes.getPointer()};
     llvm::Value *IsActive = CGF.EmitRuntimeCall(
         createNVPTXRuntimeFunction(OMPRTL_NVPTX__kmpc_kernel_convergent_simd),
         Args);
@@ -4647,8 +4696,11 @@ void CGOpenMPRuntimeNVPTX::emitTeamsCall(CodeGenFunction &CGF,
       CGF.EmitOMPPrivateClause(D, PrivateScope);
       CGF.EmitOMPReductionClauseInit(D, PrivateScope);
       (void)PrivateScope.Privatize();
-      CGF.EmitStmt(
-          cast<CapturedStmt>(D.getAssociatedStmt())->getCapturedStmt());
+      const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+      if (D.hasClausesOfKind<OMPDependClause>() &&
+          isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+        CS = cast<CapturedStmt>(CS->getCapturedStmt());
+      CGF.EmitStmt(CS->getCapturedStmt());
       CGF.EmitOMPReductionClauseFinal(D, OMPD_teams);
     };
 

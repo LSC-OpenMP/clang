@@ -2300,6 +2300,7 @@ void OMPClauseReader::VisitOMPDependClause(OMPDependClause *C) {
 }
 
 void OMPClauseReader::VisitOMPDeviceClause(OMPDeviceClause *C) {
+  VisitOMPClauseWithPreInit(C);
   C->setDevice(Reader->Record.readSubExpr());
   C->setLParenLoc(Reader->ReadSourceLocation());
 }
