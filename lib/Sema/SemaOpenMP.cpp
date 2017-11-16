@@ -845,10 +845,10 @@ void DSAStackTy::addTaskgroupReductionData(ValueDecl *D, SourceRange SR,
   Expr *&TaskgroupReductionRef =
       Stack.back().first.back().TaskgroupReductionRef;
   if (!TaskgroupReductionRef) {
-    auto *VD = buildVarDecl(SemaRef, SourceLocation(),
+    auto *VD = buildVarDecl(SemaRef, SR.getBegin(),
                             SemaRef.Context.VoidPtrTy, ".task_red.");
-    TaskgroupReductionRef = buildDeclRefExpr(
-        SemaRef, VD, SemaRef.Context.VoidPtrTy, SourceLocation());
+    TaskgroupReductionRef =
+        buildDeclRefExpr(SemaRef, VD, SemaRef.Context.VoidPtrTy, SR.getBegin());
   }
 }
 
@@ -869,10 +869,10 @@ void DSAStackTy::addTaskgroupReductionData(ValueDecl *D, SourceRange SR,
   Expr *&TaskgroupReductionRef =
       Stack.back().first.back().TaskgroupReductionRef;
   if (!TaskgroupReductionRef) {
-    auto *VD = buildVarDecl(SemaRef, SourceLocation(),
-                            SemaRef.Context.VoidPtrTy, ".task_red.");
-    TaskgroupReductionRef = buildDeclRefExpr(
-        SemaRef, VD, SemaRef.Context.VoidPtrTy, SourceLocation());
+    auto *VD = buildVarDecl(SemaRef, SR.getBegin(), SemaRef.Context.VoidPtrTy,
+                            ".task_red.");
+    TaskgroupReductionRef =
+        buildDeclRefExpr(SemaRef, VD, SemaRef.Context.VoidPtrTy, SR.getBegin());
   }
 }
 
@@ -977,6 +977,12 @@ DSAStackTy::DSAVarData DSAStackTy::getTopDSA(ValueDecl *D, bool FromParent) {
     DVar.RefExpr = TI->getSecond().RefExpr.getPointer();
     DVar.CKind = OMPC_threadprivate;
     return DVar;
+  } else if (VD && VD->hasAttr<OMPThreadPrivateDeclAttr>()) {
+    DVar.RefExpr = buildDeclRefExpr(
+        SemaRef, VD, D->getType().getNonReferenceType(),
+        VD->getAttr<OMPThreadPrivateDeclAttr>()->getLocation());
+    DVar.CKind = OMPC_threadprivate;
+    addDSA(D, DVar.RefExpr, OMPC_threadprivate);
   }
 
   if (isStackEmpty())
@@ -1440,6 +1446,17 @@ unsigned Sema::getOpenMPNestingLevel() const {
   return DSAStack->getNestingLevel();
 }
 
+bool Sema::isInOpenMPTargetExecutionDirective() const {
+  return (isOpenMPTargetExecutionDirective(DSAStack->getCurrentDirective()) &&
+          !DSAStack->isClauseParsingMode()) ||
+         DSAStack->hasDirective(
+             [](OpenMPDirectiveKind K, const DeclarationNameInfo &,
+                SourceLocation) -> bool {
+               return isOpenMPTargetExecutionDirective(K);
+             },
+             false);
+}
+
 VarDecl *Sema::IsOpenMPCapturedDecl(ValueDecl *D) {
   assert(LangOpts.OpenMP && "OpenMP is not allowed");
   D = getCanonicalDecl(D);
@@ -1453,15 +1470,7 @@ VarDecl *Sema::IsOpenMPCapturedDecl(ValueDecl *D) {
   auto *VD = dyn_cast<VarDecl>(D);
   if (VD && !VD->hasLocalStorage() &&
       !VD->hasAttr<OMPDeclareTargetDeclAttr>()) {
-    if (isOpenMPTargetExecutionDirective(DSAStack->getCurrentDirective()) &&
-        !DSAStack->isClauseParsingMode())
-      return VD;
-    if (DSAStack->hasDirective(
-            [](OpenMPDirectiveKind K, const DeclarationNameInfo &,
-               SourceLocation) -> bool {
-              return isOpenMPTargetExecutionDirective(K);
-            },
-            false))
+    if (isInOpenMPTargetExecutionDirective())
       return VD;
   }
 
@@ -4516,7 +4525,7 @@ static bool FitsInto(unsigned Bits, bool Signed, Expr *E, Sema &SemaRef) {
 
 /// Build preinits statement for the given declarations.
 static Stmt *buildPreInits(ASTContext &Context,
-                           SmallVectorImpl<Decl *> &PreInits) {
+                           MutableArrayRef<Decl *> PreInits) {
   if (!PreInits.empty()) {
     return new (Context) DeclStmt(
         DeclGroupRef::Create(Context, PreInits.begin(), PreInits.size()),
@@ -4526,8 +4535,9 @@ static Stmt *buildPreInits(ASTContext &Context,
 }
 
 /// Build preinits statement for the given declarations.
-static Stmt *buildPreInits(ASTContext &Context,
-                           llvm::MapVector<Expr *, DeclRefExpr *> &Captures) {
+static Stmt *
+buildPreInits(ASTContext &Context,
+              const llvm::MapVector<Expr *, DeclRefExpr *> &Captures) {
   if (!Captures.empty()) {
     SmallVector<Decl *, 16> PreInits;
     for (auto &Pair : Captures)
@@ -9988,16 +9998,24 @@ static void CheckOMPReductionTypeClause(
     }
 
     if ((OASE && !ConstantLengthOASE) ||
-        (!ASE &&
+        (!OASE && !ASE &&
          D->getType().getNonReferenceType()->isVariablyModifiedType())) {
+      if (Context.getLangOpts().OpenMPIsDevice &&
+          !Context.getTargetInfo().isVLASupported() &&
+          (OMPSema.isInOpenMPDeclareTargetContext() ||
+           OMPSema.isInOpenMPTargetExecutionDirective())) {
+        OMPSema.Diag(ELoc, diag::err_omp_target_reduction_vla) << !!OASE;
+        OMPSema.Diag(ELoc, diag::note_omp_target_vla_support);
+        continue;
+      }
       // For arrays/array sections only:
       // Create pseudo array type for private copy. The size for this array will
       // be generated during codegen.
       // For array subscripts or single variables Private Ty is the same as Type
       // (type of the variable or single array element).
       PrivateTy = Context.getVariableArrayType(
-          Type, new (Context) OpaqueValueExpr(SourceLocation(),
-                                              Context.getSizeType(), VK_RValue),
+          Type,
+          new (Context) OpaqueValueExpr(ELoc, Context.getSizeType(), VK_RValue),
           ArrayType::Normal, /*IndexTypeQuals=*/0, SourceRange());
     } else if (!ASE && !OASE &&
                Context.getAsArrayType(D->getType().getNonReferenceType()))
@@ -10080,8 +10098,7 @@ static void CheckOMPReductionTypeClause(
           if (Type->isPointerType()) {
             // Cast to pointer type.
             auto CastExpr = OMPSema.BuildCStyleCastExpr(
-                SourceLocation(), Context.getTrivialTypeSourceInfo(Type, ELoc),
-                SourceLocation(), Init);
+                ELoc, Context.getTrivialTypeSourceInfo(Type, ELoc), ELoc, Init);
             if (CastExpr.isInvalid())
               continue;
             Init = CastExpr.get();
@@ -10178,9 +10195,9 @@ static void CheckOMPReductionTypeClause(
                                            ReductionId.getLocStart(), BO_Assign,
                                            LHSDRE, ReductionOp.get());
         } else {
-          auto *ConditionalOp = new (Context) ConditionalOperator(
-              ReductionOp.get(), SourceLocation(), LHSDRE, SourceLocation(),
-              RHSDRE, Type, VK_LValue, OK_Ordinary);
+          auto *ConditionalOp = new (Context)
+              ConditionalOperator(ReductionOp.get(), ELoc, LHSDRE, ELoc, RHSDRE,
+                                  Type, VK_LValue, OK_Ordinary);
           ReductionOp = OMPSema.BuildBinOp(InDSAStack->getCurScope(),
                                            ReductionId.getLocStart(), BO_Assign,
                                            LHSDRE, ConditionalOp);
@@ -11059,7 +11076,7 @@ Sema::ActOnOpenMPDependClause(OpenMPDependClauseKind DepKind,
         }
         bool Suppress = getDiagnostics().getSuppressAllDiagnostics();
         getDiagnostics().setSuppressAllDiagnostics(/*Val=*/true);
-        ExprResult Res = CreateBuiltinUnaryOp(SourceLocation(), UO_AddrOf,
+        ExprResult Res = CreateBuiltinUnaryOp(ELoc, UO_AddrOf,
                                               RefExpr->IgnoreParenImpCasts());
         getDiagnostics().setSuppressAllDiagnostics(Suppress);
         if (!Res.isUsable() && !isa<OMPArraySectionExpr>(SimpleExpr)) {

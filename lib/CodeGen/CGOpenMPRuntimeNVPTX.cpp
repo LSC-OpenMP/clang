@@ -19,6 +19,7 @@
 #include "clang/AST/DeclOpenMP.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "clang/AST/StmtVisitor.h"
+#include "clang/Basic/Cuda.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "llvm/ADT/SmallPtrSet.h"
 
@@ -3949,6 +3950,13 @@ llvm::Function *CGOpenMPRuntimeNVPTX::createDataSharingParallelWrapper(
   return Fn;
 }
 
+namespace {
+static bool IsVolta(CodeGenModule &CGM) {
+  StringRef TargetCPU = CGM.getTarget().getTargetOpts().CPU;
+  return StringToCudaArch(TargetCPU) == CudaArch::SM_70;
+}
+}
+
 // \brief Emit the code that each thread requires to execute when it encounters
 // one of the three possible parallelism level. This also emits the required
 // data sharing code for each level.
@@ -3982,6 +3990,7 @@ void CGOpenMPRuntimeNVPTX::emitParallelismLevelCode(
   //
   // .next.parallel
 
+  bool CGForVolta = IsVolta(CGF.CGM);
   llvm::BasicBlock *AfterBB = CGF.createBasicBlock(".after.parallel");
 
   // Do we need to emit L0 code?
@@ -4006,18 +4015,24 @@ void CGOpenMPRuntimeNVPTX::emitParallelismLevelCode(
       CGF.EmitBlock(NextBB);
   }
 
+  bool SkipSequentialDetect = false;
   // Do we need to emit L1 code?
   if (!OnlyInL0 && !OnlySequential) {
     llvm::BasicBlock *LBB = CGF.createBasicBlock(".level1.parallel");
     llvm::BasicBlock *NextBB = nullptr;
 
     // Do we need runtime checks
-    if (!OnlyInL1) {
+    // Volta always requires a runtime check for a full warp.
+    if (CGForVolta || !OnlyInL1) {
       NextBB = CGF.createBasicBlock(".next.parallel");
       llvm::Value *ParallelLevel = ParallelLevelGen();
       auto *Cond = Bld.CreateICmpEQ(ParallelLevel, Bld.getInt16(1));
       Bld.CreateCondBr(Cond, LBB, NextBB);
     }
+    // On Volta, if generating L1 code, we also need the serialized parallel
+    // code.  We must also prevent any further runtime calls to
+    // getParallelLevel.
+    SkipSequentialDetect = CGForVolta;
 
     CGF.EmitBlock(LBB);
 
@@ -4029,11 +4044,11 @@ void CGOpenMPRuntimeNVPTX::emitParallelismLevelCode(
   }
 
   // Do we need to emit sequential code?
-  if (!OnlyInL0 && !OnlyInL1) {
+  if (!OnlyInL0 && (CGForVolta || !OnlyInL1)) {
     llvm::BasicBlock *SeqBB = CGF.createBasicBlock(".sequential.parallel");
 
     // Do we need runtime checks
-    if (!OnlySequential) {
+    if (!OnlySequential && !SkipSequentialDetect) {
       llvm::Value *ParallelLevel = ParallelLevelGen();
       auto *Cond = Bld.CreateICmpSGT(ParallelLevel, Bld.getInt16(1));
       Bld.CreateCondBr(Cond, SeqBB, AfterBB);
@@ -4599,6 +4614,18 @@ void CGOpenMPRuntimeNVPTX::emitNumTeamsClause(CodeGenFunction &CGF,
                                               const Expr *ThreadLimit,
                                               SourceLocation Loc) {}
 
+void CGOpenMPRuntimeNVPTX::emitInitDSBlock(CodeGenFunction &CGF) {
+  auto BB = CGF.createBasicBlock("omp.init.ds");
+  CGF.EmitBranch(BB);
+  CGF.EmitBlock(BB);
+
+  // Save basic block because names are immediately discarded in Release
+  // builds that pass in -discard-value-names.
+  auto &DSInfo = DataSharingFunctionInfoMap[CGF.CurFn];
+  assert(DSInfo.InitDSBlock == nullptr && "Didn't expect data sharing!");
+  DSInfo.InitDSBlock = BB;
+}
+
 static void emitPostUpdateForReductionClause(
     CodeGenFunction &CGF, const OMPExecutableDirective &D,
     const llvm::function_ref<llvm::Value *(CodeGenFunction &)> &CondGen) {
@@ -4646,9 +4673,10 @@ void CGOpenMPRuntimeNVPTX::emitTeamsCall(CodeGenFunction &CGF,
     // This code generation is a duplication of the one in CGStmtOpenMP.cpp
     // and it has to be removed once the sharing from teams distribute to
     // any contained worksharing loop works smoothly.
-    auto &&CGDistributeInlined = [&D](CodeGenFunction &CGF, PrePostActionTy &) {
+    auto &&CGDistributeInlined = [this, &D](CodeGenFunction &CGF, PrePostActionTy &) {
       CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
       CGF.EmitOMPReductionClauseInit(D, PrivateScope);
+      emitInitDSBlock(CGF);
       (void)PrivateScope.Privatize();
       auto &&CGDistributeLoop = [&D](CodeGenFunction &CGF, PrePostActionTy &) {
         CGF.EmitOMPDistributeLoop(*(dyn_cast<OMPLoopDirective>(&D)),
@@ -4667,11 +4695,12 @@ void CGOpenMPRuntimeNVPTX::emitTeamsCall(CodeGenFunction &CGF,
     // This code generation is a duplication of the one in CGStmtOpenMP.cpp
     // and it has to be removed once the sharing from teams distribute to
     // any contained worksharing loop works smoothly.
-    auto &&CGDistributeInlined = [&D](CodeGenFunction &CGF, PrePostActionTy &) {
+    auto &&CGDistributeInlined = [this, &D](CodeGenFunction &CGF, PrePostActionTy &) {
       CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
       (void)CGF.EmitOMPFirstprivateClause(D, PrivateScope);
       CGF.EmitOMPPrivateClause(D, PrivateScope);
       CGF.EmitOMPReductionClauseInit(D, PrivateScope);
+      emitInitDSBlock(CGF);
       (void)PrivateScope.Privatize();
       auto &&CGDistributeLoop = [&D](CodeGenFunction &CGF, PrePostActionTy &) {
         auto &&CGSimd = [&D](CodeGenFunction &CGF, PrePostActionTy &) {
@@ -4690,11 +4719,12 @@ void CGOpenMPRuntimeNVPTX::emitTeamsCall(CodeGenFunction &CGF,
   } else {
     // Just emit the statements in the teams region inlined.
     // This has to be removed too when data sharing is fixed.
-    auto &&CodeGen = [&D](CodeGenFunction &CGF, PrePostActionTy &) {
+    auto &&CodeGen = [this, &D](CodeGenFunction &CGF, PrePostActionTy &) {
       CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
       (void)CGF.EmitOMPFirstprivateClause(D, PrivateScope);
       CGF.EmitOMPPrivateClause(D, PrivateScope);
       CGF.EmitOMPReductionClauseInit(D, PrivateScope);
+      emitInitDSBlock(CGF);
       (void)PrivateScope.Privatize();
       const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
       if (D.hasClausesOfKind<OMPDependClause>() &&
@@ -4728,14 +4758,9 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
     llvm::BasicBlock &HeaderBB = Fn->front();
 
     llvm::Instruction *SharedDataInfrastructureInsertPoint = nullptr;
-    bool hasOMPInitDSBlock = false;
-    for (auto &BB : Fn->getBasicBlockList()) {
-      if (BB.getName() == "omp.init.ds") {
-        SharedDataInfrastructureInsertPoint = &(*BB.begin());
-        hasOMPInitDSBlock = true;
-        break;
-      }
-    }
+    bool hasOMPInitDSBlock = (DSI.InitDSBlock != nullptr);
+    if (hasOMPInitDSBlock)
+      SharedDataInfrastructureInsertPoint = &(*DSI.InitDSBlock->begin());
 
     // Find the last alloca and the last replacement that is not an alloca.
     llvm::Instruction *LastAlloca = nullptr;
@@ -4894,7 +4919,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
         }
         // Only visit the header and omp.init.ds (if it exists) blocks.
         if (hasOMPInitDSBlock) {
-          if (StartBlock.getName() == "omp.init.ds")
+          if (&StartBlock == DSI.InitDSBlock)
             break;
         } else
             break;
@@ -4915,10 +4940,10 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
             llvm::Instruction *OuterInstr = &*II;
             ++II;
 
-            if (dyn_cast<llvm::AllocaInst>(OuterInstr))
+            if (isa<llvm::AllocaInst>(OuterInstr))
               continue;
 
-            if (dyn_cast<llvm::StoreInst>(OuterInstr))
+            if (isa<llvm::StoreInst>(OuterInstr))
               continue;
 
             // Instruction I is the current instruction
@@ -4932,8 +4957,15 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
                   llvm::Instruction *InnerInstr = &*JJ;
                   ++JJ;
 
-                  if (OuterInstr == InnerInstr)
+                  if (OuterInstr == InnerInstr) {
                     InitFound = true;
+                    break;
+                  }
+
+                  // PHINodes may reference a value before its initialization but
+                  // this might be fine, so don't move it.
+                  if (isa<llvm::PHINode>(InnerInstr))
+                    continue;
 
                   if (Usage == InnerInstr)
                     if (!InitFound){
@@ -4944,7 +4976,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
                 }
                 // Only visit the header and omp.init.ds (if it exists) blocks.
                 if (hasOMPInitDSBlock) {
-                  if (StartBlock.getName() == "omp.init.ds")
+                  if (&StartBlock == DSI.InitDSBlock)
                     break;
                 } else
                     break;
@@ -4953,7 +4985,7 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
           }
           // Only visit the header and omp.init.ds (if it exists) blocks.
           if (hasOMPInitDSBlock) {
-            if (StartBlock.getName() == "omp.init.ds")
+            if (&StartBlock == DSI.InitDSBlock)
               break;
           } else
               break;
@@ -4968,13 +5000,8 @@ llvm::Function *CGOpenMPRuntimeNVPTX::emitRegistrationFunction() {
           break;
         }
     } else {
-      for (auto &BB : Fn->getBasicBlockList()) {
-        if (BB.getName() == "omp.init.ds") {
-          InitializationInsertPtr = &(*BB.begin());
-          InsertPtr = InitializationInsertPtr;
-          break;
-        }
-      }
+      InitializationInsertPtr = &(*DSI.InitDSBlock->begin());
+      InsertPtr = InitializationInsertPtr;
     }
 
     // If this is an entry point, we have to initialize the data sharing first.

@@ -1780,6 +1780,10 @@ public:
   virtual void emitNumTeamsClause(CodeGenFunction &CGF, const Expr *NumTeams,
                                   const Expr *ThreadLimit, SourceLocation Loc);
 
+  /// \brief Emits a BasicBlock for data sharing if needed by this runtime
+  /// implementation.
+  virtual void emitInitDSBlock(CodeGenFunction &CGF) {}
+
   /// Struct that keeps all the relevant information that should be kept
   /// throughout a 'target data' region.
   class TargetDataInfo {
