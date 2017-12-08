@@ -974,8 +974,7 @@ public:
   /// checks).
   ///
   virtual void emitBarrierCall(CodeGenFunction &CGF, SourceLocation Loc,
-                               OpenMPDirectiveKind Kind,
-                               bool EmitChecks = true,
+                               OpenMPDirectiveKind Kind, bool EmitChecks = true,
                                bool ForceSimpleCall = false);
 
   /// \brief Check if the specified \a ScheduleKind is static non-chunked.
@@ -1143,9 +1142,8 @@ public:
   /// \param ST Address of the output variable in which the stride value is
   /// returned.
   virtual llvm::Value *emitForNext(CodeGenFunction &CGF, SourceLocation Loc,
-                                   unsigned IVSize, bool IVSigned,
-                                   Address IL, Address LB,
-                                   Address UB, Address ST);
+                                   unsigned IVSize, bool IVSigned, Address IL,
+                                   Address LB, Address UB, Address ST);
 
   /// \brief Emits call to void __kmpc_push_num_threads(ident_t *loc, kmp_int32
   /// global_tid, kmp_int32 num_threads) to generate code for 'num_threads'
@@ -1175,8 +1173,7 @@ public:
   /// \param Loc Location of the reference to threadprivate var.
   /// \return Address of the threadprivate variable for the current thread.
   virtual Address getAddrOfThreadPrivate(CodeGenFunction &CGF,
-                                         const VarDecl *VD,
-                                         Address VDAddr,
+                                         const VarDecl *VD, Address VDAddr,
                                          SourceLocation Loc);
 
   /// \brief Emit a code for initialization of threadprivate variable. It emits
@@ -1273,10 +1270,11 @@ public:
   /// otherwise.
   /// \param Data Additional data for task generation like tiednsee, final
   /// state, list of privates etc.
-  virtual void emitTaskLoopCall(
-      CodeGenFunction &CGF, SourceLocation Loc, const OMPLoopDirective &D,
-      llvm::Value *TaskFunction, QualType SharedsTy, Address Shareds,
-      const Expr *IfCond, const OMPTaskDataTy &Data);
+  virtual void emitTaskLoopCall(CodeGenFunction &CGF, SourceLocation Loc,
+                                const OMPLoopDirective &D,
+                                llvm::Value *TaskFunction, QualType SharedsTy,
+                                Address Shareds, const Expr *IfCond,
+                                const OMPTaskDataTy &Data);
 
   /// \brief Emit code for the directive that does not require outlining.
   ///
@@ -1541,6 +1539,14 @@ public:
   /// \param ThreadLimit An integer expression of threads.
   virtual void emitNumTeamsClause(CodeGenFunction &CGF, const Expr *NumTeams,
                                   const Expr *ThreadLimit, SourceLocation Loc);
+
+  /// \brief Emit code for the loop-based directives for opencl/spir target.
+  virtual void EmitOMPLoopAsCLKernel(CodeGenFunction &CGF,
+                                     const OMPLoopDirective &S);
+
+  /// \brief Emit code for the reduction directives for opencl/spir target.
+  virtual void EmitOMPReductionAsCLKernel(CodeGenFunction &CGF,
+                                          const OMPLoopDirective &S);
 
   /// Struct that keeps all the relevant information that should be kept
   /// throughout a 'target data' region.
