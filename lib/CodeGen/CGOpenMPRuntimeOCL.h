@@ -70,7 +70,7 @@ protected:
   /// \brief Creates offloading entry for the provided entry ID \a ID,
   /// address \a Addr, size \a Size, and flags \a Flags.
   virtual void createOffloadEntry(llvm::Constant *ID, llvm::Constant *Addr,
-                                  uint64_t Size, int64_t Flags = 0u);
+                                  uint64_t Size, uint64_t Flags = 0u);
 
 public:
   explicit CGOpenMPRuntimeOCL(CodeGenModule &CGM);
@@ -101,7 +101,8 @@ public:
   /// \param CodeGen Code generation sequence for the \a D directive.
   virtual llvm::Value *emitParallelOutlinedFunction(
       const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
-      OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen);
+      OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
+      unsigned CaptureLevel = 1, unsigned ImplicitParamStop = 0);
 
   /// \brief Emits code for parallel or serial call of the \a OutlinedFn with
   /// variables captured in a record which address is stored in \a
@@ -129,7 +130,9 @@ public:
   llvm::Value *emitTeamsOutlinedFunction(const OMPExecutableDirective &D,
                                          const VarDecl *ThreadIDVar,
                                          OpenMPDirectiveKind InnermostKind,
-                                         const RegionCodeGenTy &CodeGen);
+                                         const RegionCodeGenTy &CodeGen,
+                                         unsigned CaptureLevel = 1,
+                                         unsigned ImplicitParamStop = 0);
 
   /// \brief Emits code for teams call of the \a OutlinedFn with
   /// variables captured in a record which address is stored in \a
@@ -204,7 +207,7 @@ public:
   /// \param DKind Kind of the directive for which the static finish is emitted.
   ///
   virtual void emitForStaticFinish(CodeGenFunction &CGF, SourceLocation Loc,
-                                   OpenMPDirectiveKind DKind);
+                                   bool CoalescedDistSchedule = false);
 
   // Iteration of dynamic loop, i.e., Schedule (dynamic)
   virtual void emitForDispatchInit(CodeGenFunction &CGF, SourceLocation Loc,
