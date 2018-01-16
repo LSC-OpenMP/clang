@@ -637,7 +637,7 @@ void CGOpenMPRuntimeOCL::emitForDispatchFinish(CodeGenFunction &CGF,
                                                SourceLocation Loc,
                                                unsigned IVSize, bool IVSigned) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitForDispatchFinish\n";
+   llvm::errs() << "CGOpenMPRuntimeOCL::emitForDispatchFinish\n";
 }
 
 void CGOpenMPRuntimeOCL::emitDistributeStaticInit(

@@ -2228,20 +2228,7 @@ struct ScheduleKindModifiersTy {
 } // namespace
 
 bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
-  /* marcio */
   llvm::errs() << "enter CodeGenFunction::EmitOMPWorksharingLoop\n";
-  /* oicram */
-
-  /*
-  if (CGM.getTriple().isOpenCL() || CGM.getTriple().isSPIR()) {
-      if (auto *C = S.getSingleClause<OMPReductionClause>()) {
-          CodeGenFunction::EmitOMPReductionAsCLKernel(S);
-      } else {
-          CodeGenFunction::EmitOMPLoopAsCLKernel(S);
-      }
-      return false;
-  }
-*/
 
   // Emit the loop iteration variable.
   auto IVExpr = cast<DeclRefExpr>(S.getIterationVariable());
