@@ -1756,6 +1756,7 @@ public:
   NVPTXTargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : TargetInfo(Triple) {
     TLSSupported = false;
+    VLASupported = false;
     LongWidth = LongAlign = 64;
     AddrSpaceMap = &NVPTXAddrSpaceMap;
     UseAddrSpaceMapMangling = true;
@@ -1873,6 +1874,8 @@ public:
           return "610";
         case CudaArch::SM_62:
           return "620";
+        case CudaArch::SM_70:
+          return "700";
         }
         llvm_unreachable("unhandled CudaArch");
       }();
@@ -8251,6 +8254,7 @@ public:
     assert(getTriple().getEnvironment() == llvm::Triple::UnknownEnvironment &&
            "SPIR target must use unknown environment type");
     TLSSupported = false;
+    VLASupported = false;
     LongWidth = LongAlign = 64;
     AddrSpaceMap = &SPIRAddrSpaceMap;
     UseAddrSpaceMapMangling = true;

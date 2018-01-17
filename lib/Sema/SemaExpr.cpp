@@ -11202,7 +11202,25 @@ ExprResult Sema::CreateBuiltinBinOp(SourceLocation OpLoc,
   else if (const ObjCIvarRefExpr *OIRE =
            dyn_cast<ObjCIvarRefExpr>(LHS.get()->IgnoreParenCasts()))
     DiagnoseDirectIsaAccess(*this, OIRE, OpLoc, RHS.get());
-  
+
+  if (getLangOpts().OpenMP && CompResultTy.isNull() && BO_Assign == Opc) {
+    auto *RefExpr = LHS.get()->IgnoreParenCasts();
+    auto *DE = dyn_cast_or_null<DeclRefExpr>(RefExpr);
+    auto *ME = dyn_cast_or_null<MemberExpr>(RefExpr);
+    if (DE || ME) {
+      auto *Var = DE ? DE->getDecl() : ME->getMemberDecl();
+      if (Var) {
+        if (isOpenMPConditionalLastprivate(Var)) {
+          ExprResult PAssign = new (Context)
+              BinaryOperator(LHS.get(), RHS.get(), Opc, ResultTy, VK, OK, OpLoc,
+                             FPFeatures.fp_contract);
+
+          return getOpenMPUpdateExprForConditionalLastprivate(
+              Var, PAssign.get(), OpLoc);
+        }
+      }
+    }
+  }
   if (CompResultTy.isNull())
     return new (Context) BinaryOperator(LHS.get(), RHS.get(), Opc, ResultTy, VK,
                                         OK, OpLoc, FPFeatures.fp_contract);
@@ -13646,8 +13664,13 @@ static bool captureInCapturedRegion(CapturedRegionScopeInfo *RSI,
   bool ByRef = true;
   // Using an LValue reference type is consistent with Lambdas (see below).
   if (S.getLangOpts().OpenMP && RSI->CapRegionKind == CR_OpenMP) {
-    if (S.IsOpenMPCapturedDecl(Var))
+    if (S.IsOpenMPCapturedDecl(Var)) {
+      bool HasConst = DeclRefType.isConstQualified();
       DeclRefType = DeclRefType.getUnqualifiedType();
+      // Don't lose diagnostics about assignments to const.
+      if (HasConst)
+        DeclRefType.addConst();
+    }
     ByRef = S.IsOpenMPCapturedByRef(Var, RSI->OpenMPLevel);
   }
 
@@ -13842,6 +13865,7 @@ bool Sema::tryCaptureVariable(
   bool IsGlobal = !Var->hasLocalStorage();
   if (IsGlobal && !(LangOpts.OpenMP && IsOpenMPCapturedDecl(Var)))
     return true;
+  Var = Var->getCanonicalDecl();
 
   // Walk up the stack to determine whether we can capture the variable,
   // performing the "simple" checks that don't depend on type. We stop when
@@ -14232,7 +14256,8 @@ static void DoMarkVarDeclReferenced(Sema &SemaRef, SourceLocation Loc,
   if (E && IsVariableAConstantExpression(Var, SemaRef.Context)) {
     // A reference initialized by a constant expression can never be
     // odr-used, so simply ignore it.
-    if (!Var->getType()->isReferenceType())
+    if (!Var->getType()->isReferenceType() ||
+        (SemaRef.LangOpts.OpenMP && SemaRef.IsOpenMPCapturedDecl(Var)))
       SemaRef.MaybeODRUseExprs.insert(E);
   } else
     MarkVarDeclODRUsed(Var, Loc, SemaRef,

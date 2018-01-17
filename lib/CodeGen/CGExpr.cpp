@@ -58,12 +58,112 @@ llvm::Value *CodeGenFunction::EmitCastToVoidPtr(llvm::Value *value) {
   return Builder.CreateBitCast(value, destType);
 }
 
+static llvm::Value *emitNaNsPoisonFunction(CodeGenModule &CGM,
+                                           CharUnits Align) {
+  // void ___common_alloca_snans_poison(void *in, size_t size) {
+  //   void *end = in[size];
+  //   do {
+  //     *(int64*)in = (int64)sNaN;
+  //     in = &in[8];
+  //   } while(in < end);
+  // }
+  auto &C = CGM.getContext();
+  FunctionArgList Args;
+  ImplicitParamDecl InParm(C, C.VoidPtrTy, ImplicitParamDecl::Other);
+  ImplicitParamDecl SizeParm(C, C.getSizeType(), ImplicitParamDecl::Other);
+  Args.push_back(&InParm);
+  Args.push_back(&SizeParm);
+  auto &FnInfo =
+      CGM.getTypes().arrangeBuiltinFunctionDeclaration(C.VoidTy, Args);
+  auto *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
+  auto *Fn =
+      llvm::Function::Create(FnTy, llvm::GlobalValue::InternalLinkage,
+                             "___common_alloca_snans_poison", &CGM.getModule());
+  CGM.SetInternalFunctionAttributes(/*D=*/nullptr, Fn, FnInfo);
+  Fn->removeFnAttr(llvm::Attribute::NoInline);
+  Fn->addFnAttr(llvm::Attribute::AlwaysInline);
+  CodeGenFunction CGF(CGM);
+  CGF.disableDebugInfo();
+  CGF.StartFunction(GlobalDecl(), C.VoidTy, Fn, FnInfo, Args);
+  llvm::BasicBlock *NansBeginBlock = CGF.createBasicBlock("NansBegin");
+  CGF.EmitBranch(NansBeginBlock);
+  CGF.EmitBlock(NansBeginBlock);
+  llvm::Value *MinAddr =
+      CGF.EmitLoadOfScalar(CGF.GetAddrOfLocalVar(&InParm), /*Volatile=*/false,
+                           C.VoidPtrTy, SourceLocation());
+  llvm::Value *Size =
+      CGF.EmitLoadOfScalar(CGF.GetAddrOfLocalVar(&SizeParm), /*Volatile=*/false,
+                           C.getSizeType(), SourceLocation());
+  llvm::Value *MaxAddr = CGF.Builder.CreateGEP(MinAddr, Size);
+  llvm::APFloat SNan =
+      llvm::APFloat::getSNaN(C.getFloatTypeSemantics(C.DoubleTy));
+  llvm::APInt IntSNan = SNan.bitcastToAPInt();
+  llvm::Type *IntDblPtrTy =
+      CGF.Builder.getIntNTy(IntSNan.getBitWidth())->getPointerTo();
+  MinAddr =
+      CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(MinAddr, IntDblPtrTy);
+  llvm::BasicBlock *LoopBeginBlock = CGF.createBasicBlock("LoopBegin");
+  llvm::BasicBlock *LoopBlock = CGF.createBasicBlock("Loop");
+  CGF.EmitBranch(LoopBeginBlock);
+  CGF.EmitBlock(LoopBeginBlock);
+  auto *PHIMinAddr =
+      CGF.Builder.CreatePHI(MinAddr->getType(), /*NumReservedValues=*/2);
+  PHIMinAddr->addIncoming(MinAddr, NansBeginBlock);
+  auto *PtrCmp = CGF.Builder.CreateICmpULT(
+      CGF.Builder.CreatePtrToInt(PHIMinAddr, CGM.IntPtrTy),
+      CGF.Builder.CreatePtrToInt(MaxAddr, CGM.IntPtrTy));
+  CGF.Builder.CreateCondBr(PtrCmp, LoopBlock, CGF.ReturnBlock.getBlock());
+  CGF.EmitBlock(LoopBlock);
+  CGF.Builder.CreateAlignedStore(
+      llvm::ConstantInt::get(CGM.getLLVMContext(), IntSNan), PHIMinAddr, Align);
+  MinAddr = CGF.Builder.CreateConstGEP1_32(
+      PHIMinAddr,
+      C.toCharUnitsFromBits(IntSNan.getBitWidth()).getQuantity());
+  PHIMinAddr->addIncoming(MinAddr, LoopBlock);
+  CGF.EmitBranch(LoopBeginBlock);
+  CGF.FinishFunction();
+  return Fn;
+}
+
+void CodeGenFunction::EmitNaNsInit(CharUnits Align, llvm::Value *Size,
+                                   llvm::Value *Alloca) {
+  EmitNounwindRuntimeCall(
+      emitNaNsPoisonFunction(CGM, Align),
+      {EmitCastToVoidPtr(Alloca),
+       Builder.CreateIntCast(Size, CGM.SizeTy, /*isSigned=*/false)});
+}
+
 /// CreateTempAlloca - This creates a alloca and inserts it into the entry
 /// block.
 Address CodeGenFunction::CreateTempAlloca(llvm::Type *Ty, CharUnits Align,
                                           const Twine &Name) {
   auto Alloca = CreateTempAlloca(Ty, Name);
   Alloca->setAlignment(Align.getQuantity());
+  if (!Ty->isPointerTy() && (Ty->isAggregateType() || Ty->isFPOrFPVectorTy()) &&
+      getLangOpts().NansInject && CurFuncDecl &&
+      !CurFuncDecl->hasAttr<NoInstrumentFunctionAttr>() &&
+      CGM.getDataLayout().getTypeAllocSizeInBits(Ty) >= 64 &&
+      CGM.getTarget().getTriple().getOS() != llvm::Triple::CUDA) {
+    CGBuilderTy::InsertPointGuard IPG(Builder);
+    Builder.SetInsertPoint(AllocaInsertPt);
+    if (CGM.getDataLayout().getTypeAllocSizeInBits(Ty) < 128) {
+      llvm::APFloat SNan = llvm::APFloat::getSNaN(
+          getContext().getFloatTypeSemantics(getContext().DoubleTy));
+      llvm::APInt IntSNan = SNan.bitcastToAPInt();
+      llvm::Type *IntDblPtrTy =
+          Builder.getIntNTy(IntSNan.getBitWidth())->getPointerTo();
+      llvm::Value *MinAddr =
+          Builder.CreatePointerBitCastOrAddrSpaceCast(Alloca, IntDblPtrTy);
+      Builder.CreateAlignedStore(
+          llvm::ConstantInt::get(CGM.getLLVMContext(), IntSNan), MinAddr,
+          Align);
+    } else {
+      EmitNaNsInit(Align,
+                   llvm::ConstantInt::get(
+                       CGM.SizeTy, CGM.getDataLayout().getTypeAllocSize(Ty)),
+                   Alloca);
+    }
+  }
   return Address(Alloca, Align);
 }
 
@@ -2009,7 +2109,21 @@ static LValue EmitGlobalVarDeclLValue(CodeGenFunction &CGF,
       CGF.CGM.getCXXABI().usesThreadWrapperFunction())
     return CGF.CGM.getCXXABI().EmitThreadLocalVarDeclLValue(CGF, VD, T);
 
-  llvm::Value *V = CGF.CGM.GetAddrOfGlobalVar(VD);
+  llvm::Value *V;
+  if (CGF.getLangOpts().OpenMP && CGF.getLangOpts().OpenMPIsDevice &&
+      VD->hasAttr<OMPDeclareTargetDeclAttr>() &&
+      VD->getAttr<OMPDeclareTargetDeclAttr>()->getMapType() ==
+          OMPDeclareTargetDeclAttr::MT_Link) {
+    llvm::GlobalValue *GV =
+        CGF.CGM.getOpenMPRuntime().getOrCreateGlobalLinkPtr(VD);
+    assert(GV && "Link pointer not found");
+    auto Ty = CGF.CGM.getContext().getPointerType(VD->getType());
+    auto PtrAddr = CGF.MakeNaturalAlignAddrLValue(GV, Ty);
+    V = CGF.EmitLoadOfPointerLValue(PtrAddr.getAddress(),
+        Ty->getAs<PointerType>()).getPointer();
+  } else {
+    V = CGF.CGM.GetAddrOfGlobalVar(VD);
+  }
   llvm::Type *RealVarTy = CGF.getTypes().ConvertTypeForMem(VD->getType());
   V = EmitBitCastOfLValueToProperType(CGF, V, RealVarTy);
   CharUnits Alignment = CGF.getContext().getDeclAlign(VD);
@@ -2112,8 +2226,12 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
         VD->isUsableInConstantExpressions(getContext()) &&
         VD->checkInitIsICE() &&
         // Do not emit if it is private OpenMP variable.
-        !(E->refersToEnclosingVariableOrCapture() && CapturedStmtInfo &&
-          LocalDeclMap.count(VD))) {
+        !(E->refersToEnclosingVariableOrCapture() &&
+          ((CapturedStmtInfo &&
+            (LocalDeclMap.count(VD->getCanonicalDecl()) ||
+             CapturedStmtInfo->lookup(VD->getCanonicalDecl()))) ||
+           LambdaCaptureFields.lookup(VD->getCanonicalDecl()) ||
+           isa<BlockDecl>(CurCodeDecl)))) {
       llvm::Constant *Val =
         CGM.EmitConstantValue(*VD->evaluateValue(), VD->getType(), this);
       assert(Val && "failed to emit reference constant expression");
@@ -2128,6 +2246,7 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
 
     // Check for captured variables.
     if (E->refersToEnclosingVariableOrCapture()) {
+      VD = VD->getCanonicalDecl();
       if (auto *FD = LambdaCaptureFields.lookup(VD))
         return EmitCapturedFieldLValue(*this, FD, CXXABIThisValue);
       else if (CapturedStmtInfo) {
@@ -3132,12 +3251,7 @@ static Address emitOMPArraySectionBase(CodeGenFunction &CGF, const Expr *Base,
 
 LValue CodeGenFunction::EmitOMPArraySectionExpr(const OMPArraySectionExpr *E,
                                                 bool IsLowerBound) {
-  QualType BaseTy;
-  if (auto *ASE =
-          dyn_cast<OMPArraySectionExpr>(E->getBase()->IgnoreParenImpCasts()))
-    BaseTy = OMPArraySectionExpr::getBaseOriginalType(ASE);
-  else
-    BaseTy = E->getBase()->getType();
+  QualType BaseTy = OMPArraySectionExpr::getBaseOriginalType(E->getBase());
   QualType ResultExprTy;
   if (auto *AT = getContext().getAsArrayType(BaseTy))
     ResultExprTy = AT->getElementType();

@@ -46,6 +46,7 @@ int main() {
 // CHECK:      br i1 [[CMP]], label %[[INNER_LOOP_BODY:.+]], label %[[INNER_LOOP_END:.+]]
 // CHECK:      [[INNER_LOOP_BODY]]
 // <<TRUE>> - > <BODY>
+// CHECK:      load i32, i32* [[IV_PTR]]
 // CHECK:      [[IV:%.+]] = load i32, i32* [[IV_PTR]]
 // CHECK:      switch i32 [[IV]], label %[[SECTIONS_EXIT:.+]] [
 // CHECK-NEXT: i32 0, label %[[SECTIONS_CASE0:.+]]
@@ -74,7 +75,7 @@ int main() {
 
 // CHECK-LABEL: tmain
 // CHECK:       call void {{.*}} @__kmpc_fork_call(
-// CHECK:       __kmpc_global_thread_num
+// CHECK-NOT:   __kmpc_global_thread_num
 // CHECK:       call void @__kmpc_for_static_init_4(
 // CHECK:       invoke void @{{.*}}foo{{.*}}()
 // CHECK-NEXT:  unwind label %[[TERM_LPAD:.+]]

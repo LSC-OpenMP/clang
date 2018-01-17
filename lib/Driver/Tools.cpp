@@ -29,6 +29,9 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Object/Archive.h"
+#include "llvm/Object/Binary.h"
+#include "llvm/Object/ObjectFile.h"
 #include "llvm/Option/Arg.h"
 #include "llvm/Option/ArgList.h"
 #include "llvm/Option/Option.h"
@@ -4649,6 +4652,14 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
     if (A->getOption().matches(options::OPT_ffinite_math_only))
       CmdArgs.push_back("-ffinite-math-only");
 
+  Args.AddLastArg(CmdArgs, options::OPT_ftrap_EQ);
+  Args.AddLastArg(CmdArgs, options::OPT_ftrap_exact);
+  if (Args.hasArg(options::OPT_fnans_inject)) {
+    Args.AddLastArg(CmdArgs, options::OPT_fnans_inject);
+    CmdArgs.push_back("-mllvm");
+    CmdArgs.push_back("-nans-inject");
+  }
+
   // Decide whether to use verbose asm. Verbose assembly is the default on
   // toolchains which have the integrated assembler on by default.
   bool IsIntegratedAssemblerDefault =
@@ -4960,8 +4971,17 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   if (DebugInfoKind == codegenoptions::LimitedDebugInfo && NeedFullDebug)
     DebugInfoKind = codegenoptions::FullDebugInfo;
 
-  RenderDebugEnablingArgs(Args, CmdArgs, DebugInfoKind, DwarfVersion,
-                          DebuggerTuning);
+  bool IsOpenMPCudaDeviceDebug =
+      IsOpenMPDevice && DebuggerTuning == llvm::DebuggerKind::CudaGDB &&
+      (!areOptimizationsEnabled(Args) ||
+        Args.hasFlag(options::OPT_cuda_noopt_device_debug,
+                     options::OPT_no_cuda_noopt_device_debug,
+                     /*Default=*/false));
+  if (IsOpenMPCudaDeviceDebug || !IsOpenMPDevice ||
+      DebuggerTuning != llvm::DebuggerKind::CudaGDB) {
+    RenderDebugEnablingArgs(Args, CmdArgs, DebugInfoKind, DwarfVersion,
+                            DebuggerTuning);
+  }
 
   // -ggnu-pubnames turns on gnu style pubnames in the backend.
   if (Args.hasArg(options::OPT_ggnu_pubnames)) {
@@ -5134,7 +5154,9 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   Args.ClaimAllArgs(options::OPT_D);
 
   // Manually translate -O4 to -O3; let clang reject others.
-  if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
+  if (IsOpenMPCudaDeviceDebug) {
+    CmdArgs.emplace_back("-O0");
+  } else if (Arg *A = Args.getLastArg(options::OPT_O_Group)) {
     if (A->getOption().matches(options::OPT_O4)) {
       CmdArgs.push_back("-O3");
       D.Diag(diag::warn_O4_is_O3);
@@ -6564,6 +6586,11 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
                    /*Default=*/false))
     CmdArgs.push_back("-fopenmp-implicit-declare-target");
 
+  if(Args.hasFlag(options::OPT_fopenmp_implicit_map_lambdas,
+                  options::OPT_fnoopenmp_implicit_map_lambdas,
+                  false))
+    CmdArgs.push_back("-fopenmp-implicit-map-lambdas");
+
   if (Args.hasFlag(options::OPT_fopenmp_nvptx_nospmd,
                    options::OPT_fopenmp_nvptx_spmd,
                    /*Default=*/false)) {
@@ -7240,6 +7267,15 @@ void OffloadBundler::ConstructJob(Compilation &C, const JobAction &JA,
   assert(JA.getInputs().size() == Inputs.size() &&
          "Not have inputs for all dependence actions??");
 
+  // Get the arch
+  StringRef Arch = TCArgs.getLastArgValue(options::OPT_march_EQ);
+  if (Arch.empty())
+    CmdArgs.push_back(TCArgs.MakeArgString(
+        Twine("-arch=") + CLANG_OPENMP_NVPTX_DEFAULT_ARCH));
+  else
+    CmdArgs.push_back(TCArgs.MakeArgString(
+        Twine("-arch=") + Arch));
+
   // Get the targets.
   SmallString<128> Triples;
   Triples += "-targets=";
@@ -7304,8 +7340,23 @@ void OffloadBundler::ConstructJobMultipleOutputs(
   InputInfo Input = Inputs.front();
 
   // Get the type.
-  CmdArgs.push_back(TCArgs.MakeArgString(
-      Twine("-type=") + types::getTypeTempSuffix(Input.getType())));
+  StringRef InputFilname = Input.getFilename();
+  bool InputIsArchive = InputFilname.endswith(".a");
+  if (InputIsArchive)
+    CmdArgs.push_back(TCArgs.MakeArgString(
+        Twine("-type=a")));
+  else
+    CmdArgs.push_back(TCArgs.MakeArgString(
+        Twine("-type=") + types::getTypeTempSuffix(Input.getType())));
+
+  // Get the arch
+  StringRef Arch = TCArgs.getLastArgValue(options::OPT_march_EQ);
+  if (Arch.empty())
+    CmdArgs.push_back(TCArgs.MakeArgString(
+        Twine("-arch=") + CLANG_OPENMP_NVPTX_DEFAULT_ARCH));
+  else
+    CmdArgs.push_back(TCArgs.MakeArgString(
+        Twine("-arch=") + Arch));
 
   // Get the targets.
   SmallString<128> Triples;
@@ -12146,20 +12197,18 @@ void NVPTX::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
       static_cast<const toolchains::CudaToolChain &>(getToolChain());
   assert(TC.getTriple().isNVPTX() && "Wrong platform");
 
-  StringRef gpu_arch_name;
-  std::vector<std::string> gpu_arch_names;
-  // If this is an OpenMP action we need to extract the device architecture from
-  // the -march option.
+  StringRef GPUArchName;
+  // If this is an OpenMP action we need to extract the device architecture
+  // from the -march=arch option. This option may come from -Xopenmp-target
+  // flag or the default value.
   if (JA.isDeviceOffloading(Action::OFK_OpenMP)) {
-    gpu_arch_names = Args.getAllArgValues(options::OPT_march_EQ);
-    assert(gpu_arch_names.size() == 1 &&
-           "Exactly one GPU Arch required for ptxas.");
-    gpu_arch_name = gpu_arch_names[0];
+    GPUArchName = Args.getLastArgValue(options::OPT_march_EQ);
+    assert(!GPUArchName.empty() && "Must have an architecture passed in.");
   } else
-    gpu_arch_name = JA.getOffloadingArch();
+    GPUArchName = JA.getOffloadingArch();
 
   // Obtain architecture from the action.
-  CudaArch gpu_arch = StringToCudaArch(gpu_arch_name);
+  CudaArch gpu_arch = StringToCudaArch(GPUArchName);
   assert(gpu_arch != CudaArch::UNKNOWN &&
          "Device action expected to have an architecture.");
 
@@ -12170,8 +12219,22 @@ void NVPTX::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
 
   ArgStringList CmdArgs;
   CmdArgs.push_back(TC.getTriple().isArch64Bit() ? "-m64" : "-m32");
+  bool IsOpenMPDebug = false;
+  if (Arg *A = Args.getLastArg(options::OPT_g_Group)) {
+    IsOpenMPDebug = JA.isOffloading(Action::OFK_OpenMP) &&
+                    (!areOptimizationsEnabled(Args) ||
+                     Args.hasFlag(options::OPT_cuda_noopt_device_debug,
+                                  options::OPT_no_cuda_noopt_device_debug,
+                                  /*Default=*/false));
+    // If the last option explicitly specified a debug-info level, use it.
+    if (A->getOption().matches(options::OPT_gN_Group)) {
+      IsOpenMPDebug = IsOpenMPDebug &&
+                      DebugLevelToInfoKind(*A) != codegenoptions::NoDebugInfo;
+    }
+  }
   if (Args.hasFlag(options::OPT_cuda_noopt_device_debug,
-                   options::OPT_no_cuda_noopt_device_debug, false)) {
+                   options::OPT_no_cuda_noopt_device_debug, false) ||
+      IsOpenMPDebug) {
     // ptxas does not accept -g option if optimization is enabled, so
     // we ignore the compiler's -O* options if we want debug info.
     CmdArgs.push_back("-g");
@@ -12233,17 +12296,8 @@ void NVPTX::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.append(CmdPtxasArgs.begin(), CmdPtxasArgs.end());
 
   // In OpenMP we need to generate relocatable code.
-  if (JA.isOffloading(Action::OFK_OpenMP)) {
+  if (JA.isOffloading(Action::OFK_OpenMP))
     CmdArgs.push_back("-c");
-    bool O0Opt = true;
-    if (Arg *A = Args.getLastArg(options::OPT_O_Group))
-      O0Opt = A->getOption().matches(options::OPT_O0);
-    if (O0Opt && Args.hasArg(options::OPT_g_Flag)) {
-      CmdArgs.push_back("-g");
-      CmdArgs.push_back("--dont-merge-basicblocks");
-      CmdArgs.push_back("--return-at-end");
-    }
-  }
 
   const char *Exec;
   if (Arg *A = Args.getLastArg(options::OPT_ptxas_path_EQ))
@@ -12285,13 +12339,11 @@ void NVPTX::Linker::ConstructJob(Compilation &C, const JobAction &JA,
     if (Args.hasArg(options::OPT_v))
       CmdArgs.push_back("-v");
 
-    std::vector<std::string> gpu_archs =
-        Args.getAllArgValues(options::OPT_march_EQ);
-    assert(gpu_archs.size() == 1 && "Exactly one GPU Arch required for ptxas.");
-    const std::string &gpu_arch = gpu_archs[0];
+    StringRef GPUArch = Args.getLastArgValue(options::OPT_march_EQ);
+    assert(!GPUArch.empty() && "At least one GPU Arch required for nvlink.");
 
     CmdArgs.push_back("-arch");
-    CmdArgs.push_back(Args.MakeArgString(gpu_arch));
+    CmdArgs.push_back(Args.MakeArgString(GPUArch));
 
     // add paths specified in LIBRARY_PATH environment variable as -L options.
     addDirectoryList(Args, CmdArgs, "-L", "LIBRARY_PATH");
@@ -12329,24 +12381,32 @@ void NVPTX::Linker::ConstructJob(Compilation &C, const JobAction &JA,
       if (!II.isFilename())
         continue;
 
-      StringRef Name = llvm::sys::path::filename(II.getFilename());
-      std::pair<StringRef, StringRef> Split = Name.rsplit('.');
-      std::string TmpName =
-          C.getDriver().GetTemporaryPath(Split.first, "cubin");
+      StringRef OrigInputFileName =
+          llvm::sys::path::filename(II.getBaseInput());
+      if (OrigInputFileName.endswith(".a")) {
+        const char *StaticLibName =
+            C.addTempFile(C.getArgs().MakeArgString(II.getFilename()));
+        CmdArgs.push_back(StaticLibName);
+      } else {
+        StringRef Name = llvm::sys::path::filename(II.getFilename());
+        std::pair<StringRef, StringRef> Split = Name.rsplit('.');
+        std::string TmpName =
+            C.getDriver().GetTemporaryPath(Split.first, "cubin");
 
-      const char *CubinF =
-          C.addTempFile(C.getArgs().MakeArgString(TmpName.c_str()));
+        const char *CubinF =
+            C.addTempFile(C.getArgs().MakeArgString(TmpName.c_str()));
 
-      const char *CopyExec = Args.MakeArgString(getToolChain().GetProgramPath(
-          C.getDriver().IsCLMode() ? "copy" : "cp"));
+        const char *CopyExec = Args.MakeArgString(getToolChain().GetProgramPath(
+            C.getDriver().IsCLMode() ? "copy" : "cp"));
 
-      ArgStringList CopyCmdArgs;
-      CopyCmdArgs.push_back(II.getFilename());
-      CopyCmdArgs.push_back(CubinF);
-      C.addCommand(
-          llvm::make_unique<Command>(JA, *this, CopyExec, CopyCmdArgs, Inputs));
+        ArgStringList CopyCmdArgs;
+        CopyCmdArgs.push_back(II.getFilename());
+        CopyCmdArgs.push_back(CubinF);
+        C.addCommand(
+            llvm::make_unique<Command>(JA, *this, CopyExec, CopyCmdArgs, Inputs));
 
-      CmdArgs.push_back(CubinF);
+        CmdArgs.push_back(CubinF);
+      }
     }
 
     AddOpenMPLinkerScript(getToolChain(), C, Output, Inputs, Args, CmdArgs, JA);
