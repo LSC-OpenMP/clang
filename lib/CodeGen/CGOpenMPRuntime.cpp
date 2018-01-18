@@ -4107,7 +4107,7 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
     sub_target_id = 0;
   }
 
-  llvm::errs() << "  triple       : " << Triple << "\n";
+  llvm::errs() << "  triple       : " << Triple.getTriple() << "\n";
   llvm::errs() << "  sub_target_id: " << sub_target_id << "\n";
 
   ConstantInitBuilder EntryBuilder(CGM);

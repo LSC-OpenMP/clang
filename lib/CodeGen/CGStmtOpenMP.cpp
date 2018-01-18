@@ -2604,7 +2604,7 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
           EmitIgnoredExpr(S.getInit());
           EmitOMPInnerLoop(S, LoopScope.requiresCleanups(),
                            S.getCond() /* IV < GlobalUB */,
-                           S.getInc() /* Unused */,
+                           S.getInc() /* Unused */, S.getConditionalLastprivateIterInit(),
                            [&S, LoopExit](CodeGenFunction &CGF) {
                              CGF.EmitOMPLoopBody(S, LoopExit);
                              CGF.EmitStopPoint(&S);
@@ -2652,7 +2652,7 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
           EmitIgnoredExpr(S.getInit());
           // while (idx <= UB) { BODY; ++idx; }
           EmitOMPInnerLoop(S, LoopScope.requiresCleanups(), S.getCond(),
-                           S.getInc(),
+                           S.getInc(), S.getConditionalLastprivateIterInit(),
                            [&S, LoopExit](CodeGenFunction &CGF) {
                              CGF.EmitOMPLoopBody(S, LoopExit);
                              CGF.EmitStopPoint(&S);

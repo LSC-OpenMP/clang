@@ -360,7 +360,7 @@ CGOpenMPRuntimeOCL::createRuntimeFunction(OpenMPRTLFunctionSPIR Function) {
 void CGOpenMPRuntimeOCL::emitTargetOutlinedFunction(
     const OMPExecutableDirective &D, StringRef ParentName,
     llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
-    bool IsOffloadEntry, const RegionCodeGenTy &CodeGen) {
+    bool IsOffloadEntry, const RegionCodeGenTy &CodeGen, unsigned capturedLevel) {
 
   if (!IsOffloadEntry) // Nothing to do.
     return;
@@ -387,7 +387,7 @@ void CGOpenMPRuntimeOCL::emitTargetOutlinedFunction(
     CodeGen.setAction(Action);
   }
   emitTargetOutlinedFunctionHelper(D, ParentName, OutlinedFn, OutlinedFnID,
-                                   IsOffloadEntry, CodeGen);
+                                   IsOffloadEntry, CodeGen, 0);
 
   OutlinedFn->setCallingConv(llvm::CallingConv::C); // CallingConv::SPIR_KERNEL
   OutlinedFn->addFnAttr(llvm::Attribute::NoUnwind);
