@@ -55,6 +55,7 @@ add_clang_library(clangCodeGen
   CGExprComplex.cpp
   CGExprConstant.cpp
   CGExprScalar.cpp
+  CGJNI.cpp
   CGLoopInfo.cpp
   CGObjC.cpp
   CGObjCGNU.cpp
@@ -63,6 +64,7 @@ add_clang_library(clangCodeGen
   CGOpenCLRuntime.cpp
   CGOpenMPRuntime.cpp
   CGOpenMPRuntimeNVPTX.cpp
+  CGOpenMPRuntimeSpark.cpp
   CGRecordLayoutBuilder.cpp
   CGStmt.cpp
   CGStmtOpenMP.cpp
