@@ -1441,6 +1441,7 @@ llvm::Value *CGOpenMPRuntime::emitTeamsOutlinedFunction(
     const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel, unsigned ImplicitParamStop) {
+    llvm::errs() << "OpenMP::emitTeamsOutlinedFunction\n";
   return emitParallelOrTeamsOutlinedFunction(CGM, D, ThreadIDVar, InnermostKind,
                                              CodeGen, CaptureLevel,
                                              ImplicitParamStop);
@@ -1450,6 +1451,7 @@ llvm::Value *CGOpenMPRuntime::emitParallelOutlinedFunction(
     const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel, unsigned ImplicitParamStop) {
+    llvm::errs() << "OpenMP::emitParallelOutlinedFunction\n";
   return emitParallelOrTeamsOutlinedFunction(CGM, D, ThreadIDVar, InnermostKind,
                                              CodeGen, CaptureLevel,
                                              ImplicitParamStop);
@@ -1459,6 +1461,7 @@ llvm::Value *CGOpenMPRuntime::emitSimdOutlinedFunction(
     const OMPExecutableDirective &D, const VarDecl *LaneIDVar,
     const VarDecl *NumLanesVar, OpenMPDirectiveKind InnermostKind,
     const RegionCodeGenTy &CodeGen) {
+    llvm::errs() << "OpenMP::emitSimdOutlinedFunction\n";
   const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
   if (D.hasClausesOfKind<OMPDependClause>() &&
       isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
@@ -1475,6 +1478,7 @@ llvm::Value *CGOpenMPRuntime::emitTaskOutlinedFunction(
     const VarDecl *PartIDVar, const VarDecl *TaskTVar,
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     bool Tied, unsigned &NumberOfParts) {
+    llvm::errs() << "OpenMP::emitTaskOutlinedFunction\n";
   auto &&UntiedCodeGen = [this, &D, TaskTVar](CodeGenFunction &CGF,
                                               PrePostActionTy &) {
     auto *ThreadID = getThreadID(CGF, D.getLocStart());
@@ -1505,6 +1509,7 @@ llvm::Value *CGOpenMPRuntime::emitTaskOutlinedFunction(
 }
 
 Address CGOpenMPRuntime::getOrCreateDefaultLocation(unsigned Flags) {
+    llvm::errs() << "OpenMP::getOrCreateDefaultLocation\n";
   CharUnits Align = getIdentAlign(CGM);
   llvm::Value *Entry = OpenMPDefaultLocMap.lookup(Flags);
   if (!Entry) {
@@ -1539,6 +1544,7 @@ Address CGOpenMPRuntime::getOrCreateDefaultLocation(unsigned Flags) {
 llvm::Value *CGOpenMPRuntime::emitUpdateLocation(CodeGenFunction &CGF,
                                                  SourceLocation Loc,
                                                  unsigned Flags) {
+    llvm::errs() << "OpenMP::emitUpdateLocation\n";
   Flags |= OMP_IDENT_KMPC;
   // If no debug info is generated - return global default location.
   if (CGM.getCodeGenOpts().getDebugInfo() == codegenoptions::NoDebugInfo ||
@@ -1698,6 +1704,7 @@ llvm::Type *CGOpenMPRuntime::getKmpc_MicroPointerTy() {
 }
 
 llvm::Constant *CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
+    llvm::errs() << "OpenMP::createRuntimeFunction\n";
   llvm::Constant *RTLFn = nullptr;
   switch (static_cast<OpenMPRTLFunction>(Function)) {
   case OMPRTL__kmpc_fork_call: {
@@ -2568,6 +2575,7 @@ llvm::Constant *CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
 
 llvm::Constant *CGOpenMPRuntime::createForStaticInitFunction(unsigned IVSize,
                                                              bool IVSigned) {
+    llvm::errs() << "OpenMP::createForStaticInitFunction\n";
   assert((IVSize == 32 || IVSize == 64) &&
          "IV size is not compatible with the omp runtime");
   auto Name = IVSize == 32 ? (IVSigned ? "__kmpc_for_static_init_4"
@@ -2594,6 +2602,7 @@ llvm::Constant *CGOpenMPRuntime::createForStaticInitFunction(unsigned IVSize,
 
 llvm::Constant *CGOpenMPRuntime::createDispatchInitFunction(unsigned IVSize,
                                                             bool IVSigned) {
+    llvm::errs() << "OpenMP::createDispatchInitFunction\n";
   assert((IVSize == 32 || IVSize == 64) &&
          "IV size is not compatible with the omp runtime");
   auto Name =
@@ -2617,6 +2626,7 @@ llvm::Constant *CGOpenMPRuntime::createDispatchInitFunction(unsigned IVSize,
 
 llvm::Constant *CGOpenMPRuntime::createDispatchFiniFunction(unsigned IVSize,
                                                             bool IVSigned) {
+    llvm::errs() << "OpenMP::createDispatchFiniFunction\n";
   assert((IVSize == 32 || IVSize == 64) &&
          "IV size is not compatible with the omp runtime");
   auto Name =
@@ -2634,6 +2644,7 @@ llvm::Constant *CGOpenMPRuntime::createDispatchFiniFunction(unsigned IVSize,
 
 llvm::Constant *CGOpenMPRuntime::createDispatchNextFunction(unsigned IVSize,
                                                             bool IVSigned) {
+    llvm::errs() << "OpenMP::createDispatchNextFunction\n";
   assert((IVSize == 32 || IVSize == 64) &&
          "IV size is not compatible with the omp runtime");
   auto Name =
@@ -2657,6 +2668,7 @@ llvm::Constant *CGOpenMPRuntime::createDispatchNextFunction(unsigned IVSize,
 
 llvm::Constant *
 CGOpenMPRuntime::getOrCreateThreadPrivateCache(const VarDecl *VD) {
+    llvm::errs() << "OpenMP::getOrCreateThreadPrivateCache\n";
   assert(!CGM.getLangOpts().OpenMPUseTLS ||
          !CGM.getContext().getTargetInfo().isTLSSupported());
   // Lookup the entry, lazily creating it if necessary.
@@ -2668,6 +2680,7 @@ Address CGOpenMPRuntime::getAddrOfThreadPrivate(CodeGenFunction &CGF,
                                                 const VarDecl *VD,
                                                 Address VDAddr,
                                                 SourceLocation Loc) {
+    llvm::errs() << "OpenMP::getAddrOfThreadPrivate\n";
   if (CGM.getLangOpts().OpenMPUseTLS &&
       CGM.getContext().getTargetInfo().isTLSSupported())
     return VDAddr;
@@ -2687,6 +2700,7 @@ Address CGOpenMPRuntime::getAddrOfThreadPrivate(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitThreadPrivateVarInit(
     CodeGenFunction &CGF, Address VDAddr, llvm::Value *Ctor,
     llvm::Value *CopyCtor, llvm::Value *Dtor, SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitThreadPrivateVarInit\n";
   // Call kmp_int32 __kmpc_global_thread_num(&loc) to init OpenMP runtime
   // library.
   auto OMPLoc = emitUpdateLocation(CGF, Loc);
@@ -2704,6 +2718,7 @@ void CGOpenMPRuntime::emitThreadPrivateVarInit(
 llvm::Function *CGOpenMPRuntime::emitThreadPrivateVarDefinition(
     const VarDecl *VD, Address VDAddr, SourceLocation Loc, bool PerformInit,
     CodeGenFunction *CGF) {
+    llvm::errs() << "OpenMP::emitThreadPrivateVarDefinition\n";
   if (CGM.getLangOpts().OpenMPUseTLS &&
       CGM.getContext().getTargetInfo().isTLSSupported())
     return nullptr;
@@ -2822,6 +2837,7 @@ llvm::Function *CGOpenMPRuntime::emitThreadPrivateVarDefinition(
 Address CGOpenMPRuntime::getAddrOfArtificialThreadPrivate(CodeGenFunction &CGF,
                                                           QualType VarType,
                                                           StringRef Name) {
+    llvm::errs() << "OpenMP::getAddrOfArtificialThreadprivate\n";
   llvm::Twine VarName(Name, ".artificial.");
   llvm::Type *VarLVType = CGF.ConvertTypeForMem(VarType);
   llvm::Value *GAddr = getOrCreateInternalVariable(VarLVType, VarName);
@@ -2850,6 +2866,7 @@ Address CGOpenMPRuntime::getAddrOfArtificialThreadPrivate(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitOMPIfClause(CodeGenFunction &CGF, const Expr *Cond,
                                       const RegionCodeGenTy &ThenGen,
                                       const RegionCodeGenTy &ElseGen) {
+    llvm::errs() << "OpenMP::emitOMPIfClause\n";
   CodeGenFunction::LexicalScope ConditionScope(CGF, Cond->getSourceRange());
 
   // If the condition constant folds and can be elided, try to avoid emitting
@@ -2890,6 +2907,7 @@ void CGOpenMPRuntime::emitParallelCall(CodeGenFunction &CGF, SourceLocation Loc,
                                        llvm::Value *OutlinedFn,
                                        ArrayRef<llvm::Value *> CapturedVars,
                                        const Expr *IfCond) {
+    llvm::errs() << "OpenMP::emitParallelCall\n";
   if (!CGF.HaveInsertPoint())
     return;
   auto *RTLoc = emitUpdateLocation(CGF, Loc);
@@ -2946,7 +2964,9 @@ void CGOpenMPRuntime::emitParallelCall(CodeGenFunction &CGF, SourceLocation Loc,
 
 void CGOpenMPRuntime::emitSimdCall(CodeGenFunction &CGF, SourceLocation Loc,
                                    llvm::Value *OutlinedFn,
-                                   ArrayRef<llvm::Value *> CapturedVars) {}
+                                   ArrayRef<llvm::Value *> CapturedVars) {
+llvm::errs() << "OpenMP::emitSimdCall\n";
+}
 
 // If we're inside an (outlined) parallel region, use the region info's
 // thread-ID variable (it is passed in a first argument of the outlined function
@@ -2956,6 +2976,7 @@ void CGOpenMPRuntime::emitSimdCall(CodeGenFunction &CGF, SourceLocation Loc,
 // return the address of that temp.
 Address CGOpenMPRuntime::emitThreadIDAddress(CodeGenFunction &CGF,
                                              SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitThreadIDAddress\n";
   if (auto *OMPRegionInfo =
           dyn_cast_or_null<CGOpenMPRegionInfo>(CGF.CapturedStmtInfo))
     if (OMPRegionInfo->getThreadIDVariable())
@@ -2973,6 +2994,7 @@ Address CGOpenMPRuntime::emitThreadIDAddress(CodeGenFunction &CGF,
 llvm::Constant *
 CGOpenMPRuntime::getOrCreateInternalVariable(llvm::Type *Ty,
                                              const llvm::Twine &Name) {
+    llvm::errs() << "OpenMP::getOrCreateInternalVariable\n";
   SmallString<256> Buffer;
   llvm::raw_svector_ostream Out(Buffer);
   Out << Name;
@@ -2991,6 +3013,7 @@ CGOpenMPRuntime::getOrCreateInternalVariable(llvm::Type *Ty,
 }
 
 llvm::Value *CGOpenMPRuntime::getCriticalRegionLock(StringRef CriticalName) {
+    llvm::errs() << "OpenMP::getCriticalRegionLock\n";
   llvm::Twine Name(".gomp_critical_user_", CriticalName);
   return getOrCreateInternalVariable(KmpCriticalNameTy, Name.concat(".var"));
 }
@@ -3037,6 +3060,7 @@ void CGOpenMPRuntime::emitCriticalRegion(CodeGenFunction &CGF,
                                          StringRef CriticalName,
                                          const RegionCodeGenTy &CriticalOpGen,
                                          SourceLocation Loc, const Expr *Hint) {
+    llvm::errs() << "OpenMP::emitCriticalRegion\n";
   // __kmpc_critical[_with_hint](ident_t *, gtid, Lock[, hint]);
   // CriticalOpGen();
   // __kmpc_end_critical(ident_t *, gtid, Lock);
@@ -3062,6 +3086,7 @@ void CGOpenMPRuntime::emitCriticalRegion(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitMasterRegion(CodeGenFunction &CGF,
                                        const RegionCodeGenTy &MasterOpGen,
                                        SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitMasterRegion\n";
   if (!CGF.HaveInsertPoint())
     return;
   // if(__kmpc_master(ident_t *, gtid)) {
@@ -3080,6 +3105,7 @@ void CGOpenMPRuntime::emitMasterRegion(CodeGenFunction &CGF,
 
 void CGOpenMPRuntime::emitTaskyieldCall(CodeGenFunction &CGF,
                                         SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitTaskyieldCall\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Build call __kmpc_omp_taskyield(loc, thread_id, 0);
@@ -3094,6 +3120,7 @@ void CGOpenMPRuntime::emitTaskyieldCall(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitTaskgroupRegion(CodeGenFunction &CGF,
                                           const RegionCodeGenTy &TaskgroupOpGen,
                                           SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitTaskgroupRegion\n";
   if (!CGF.HaveInsertPoint())
     return;
   // __kmpc_taskgroup(ident_t *, gtid);
@@ -3177,6 +3204,7 @@ void CGOpenMPRuntime::emitSingleRegion(CodeGenFunction &CGF,
                                        ArrayRef<const Expr *> SrcExprs,
                                        ArrayRef<const Expr *> DstExprs,
                                        ArrayRef<const Expr *> AssignmentOps) {
+    llvm::errs() << "OpenMP::emitSingleRegion\n";
   if (!CGF.HaveInsertPoint())
     return;
   assert(CopyprivateVars.size() == SrcExprs.size() &&
@@ -3253,6 +3281,7 @@ void CGOpenMPRuntime::emitSingleRegion(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitOrderedRegion(CodeGenFunction &CGF,
                                         const RegionCodeGenTy &OrderedOpGen,
                                         SourceLocation Loc, bool IsThreads) {
+    llvm::errs() << "OpenMP::emitOrderedRegion\n";
   if (!CGF.HaveInsertPoint())
     return;
   // __kmpc_ordered(ident_t *, gtid);
@@ -3274,6 +3303,7 @@ void CGOpenMPRuntime::emitOrderedRegion(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitBarrierCall(CodeGenFunction &CGF, SourceLocation Loc,
                                       OpenMPDirectiveKind Kind, bool EmitChecks,
                                       bool ForceSimpleCall) {
+    llvm::errs() << "OpenMP::emitBarrierCall\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Build call __kmpc_cancel_barrier(loc, thread_id);
@@ -3426,6 +3456,7 @@ void CGOpenMPRuntime::emitForDispatchInit(CodeGenFunction &CGF,
                                           unsigned IVSize, bool IVSigned,
                                           bool Ordered, llvm::Value *LB,
                                           llvm::Value *UB, llvm::Value *Chunk) {
+    llvm::errs() << "OpenMP::emitForDispatchInit\n";
   if (!CGF.HaveInsertPoint())
     return;
   OpenMPSchedType Schedule =
@@ -3465,6 +3496,7 @@ void CGOpenMPRuntime::emitForDispatchFinish(CodeGenFunction &CGF,
                                             const OMPLoopDirective &S,
                                             SourceLocation Loc, unsigned IVSize,
                                             bool IVSigned) {
+    llvm::errs() << "OpenMP::emitForDispatchFinish\n";
   // Nothing to do here.
 }
 
@@ -3524,6 +3556,7 @@ void CGOpenMPRuntime::emitForStaticInit(CodeGenFunction &CGF,
                                         OpenMPDirectiveKind DKind,
                                         const OpenMPScheduleTy &ScheduleKind,
                                         const StaticRTInput &Values) {
+    llvm::errs() << "OpenMP::emitForStaticInit\n";
   OpenMPSchedType ScheduleNum = getRuntimeSchedule(
       ScheduleKind.Schedule, Values.Chunk != nullptr, Values.Ordered);
   assert(isOpenMPWorksharingDirective(DKind) &&
@@ -3543,6 +3576,7 @@ void CGOpenMPRuntime::emitDistributeStaticInit(
     CodeGenFunction &CGF, SourceLocation Loc,
     OpenMPDistScheduleClauseKind SchedKind,
     const CGOpenMPRuntime::StaticRTInput &Values, bool CoalescedDistSchedule) {
+    llvm::errs() << "OpenMP::emitDistributeStaticInit\n";
   OpenMPSchedType ScheduleNum = getRuntimeSchedule(
       SchedKind, Values.Chunk != nullptr, CoalescedDistSchedule);
   auto *UpdatedLocation =
@@ -3559,6 +3593,7 @@ void CGOpenMPRuntime::emitForStaticFinish(CodeGenFunction &CGF,
                                           SourceLocation Loc,
                                           OpenMPDirectiveKind DKind,
                                           bool CoalescedDistSchedule) {
+    llvm::errs() << "OpenMP::emitForStaticFinish\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Call __kmpc_for_static_fini(ident_t *loc, kmp_int32 tid);
@@ -3578,6 +3613,7 @@ void CGOpenMPRuntime::emitForOrderedIterationEnd(CodeGenFunction &CGF,
                                                  SourceLocation Loc,
                                                  unsigned IVSize,
                                                  bool IVSigned) {
+    llvm::errs() << "OpenMP::emitForOrderedIterationEnd\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Call __kmpc_for_dynamic_fini_(4|8)[u](ident_t *loc, kmp_int32 tid);
@@ -3589,6 +3625,7 @@ llvm::Value *CGOpenMPRuntime::emitForNext(CodeGenFunction &CGF,
                                           SourceLocation Loc, unsigned IVSize,
                                           bool IVSigned, Address IL, Address LB,
                                           Address UB, Address ST) {
+    llvm::errs() << "OpenMP::emitForNext\n";
   // Call __kmpc_dispatch_next(
   //          ident_t *loc, kmp_int32 tid, kmp_int32 *p_lastiter,
   //          kmp_int[32|64] *p_lower, kmp_int[32|64] *p_upper,
@@ -3611,6 +3648,7 @@ llvm::Value *CGOpenMPRuntime::emitForNext(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitNumThreadsClause(CodeGenFunction &CGF,
                                            llvm::Value *NumThreads,
                                            SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitNumThreadsClause\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Build call __kmpc_push_num_threads(&loc, global_tid, num_threads)
@@ -3624,6 +3662,7 @@ void CGOpenMPRuntime::emitNumThreadsClause(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitProcBindClause(CodeGenFunction &CGF,
                                          OpenMPProcBindClauseKind ProcBind,
                                          SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitProcBindClause\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Constants for proc bind value accepted by the runtime.
@@ -3659,6 +3698,7 @@ void CGOpenMPRuntime::emitProcBindClause(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitSimdLimit(CodeGenFunction &CGF,
                                     llvm::Value *SimdLimit,
                                     SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitSimdLimit\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Build call __kmpc_push_simd_limit(&loc, global_tid, simd_limit)
@@ -3675,6 +3715,7 @@ bool CGOpenMPRuntime::requiresBarrier(const OMPLoopDirective &S) const {
 
 void CGOpenMPRuntime::emitFlush(CodeGenFunction &CGF, ArrayRef<const Expr *>,
                                 SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitFlush\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Build call void __kmpc_flush(ident_t *loc)
@@ -3709,6 +3750,7 @@ enum KmpTaskTFields {
 } // anonymous namespace
 
 bool CGOpenMPRuntime::OffloadEntriesInfoManagerTy::empty() const {
+    /* llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::empty\n"; */
   // FIXME: Add other entries type when they become supported.
   return OffloadEntriesTargetRegion.empty() &&
          OffloadEntriesDeviceGlobalVar.empty() &&
@@ -3720,6 +3762,7 @@ void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
     initializeTargetRegionEntryInfo(unsigned DeviceID, unsigned FileID,
                                     StringRef ParentName, unsigned LineNum,
                                     unsigned Order) {
+        /* llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::initializeTargetRegionEntryInfo\n"; */
   assert(CGM.getLangOpts().OpenMPIsDevice && "Initialization of entries is "
                                              "only required for the device "
                                              "code generation.");
@@ -3734,6 +3777,7 @@ void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
                                   StringRef ParentName, unsigned LineNum,
                                   llvm::Constant *Addr, llvm::Constant *ID,
                                   uint64_t Flags) {
+        /* llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::registerTargetRegionEntryInfo\n"; */
   // If we are emitting code for a target, the entry is already initialized,
   // only has to be registered.
   if (CGM.getLangOpts().OpenMPIsDevice) {
@@ -3776,6 +3820,7 @@ bool CGOpenMPRuntime::OffloadEntriesInfoManagerTy::hasTargetRegionEntryInfo(
 
 void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::actOnTargetRegionEntriesInfo(
     const OffloadTargetRegionEntryInfoActTy &Action) {
+    llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::actOnTargetRegionEntriesInfo\n";
   // Scan all target region entries and perform the provided action.
   for (auto &D : OffloadEntriesTargetRegion)
     for (auto &F : D.second)
@@ -3785,8 +3830,9 @@ void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::actOnTargetRegionEntriesInfo(
 }
 
 /// \brief Initialize device global variable entry.
-void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
-    initializeDeviceGlobalVarEntryInfo(StringRef MangledName, unsigned Order) {
+void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::initializeDeviceGlobalVarEntryInfo(
+        StringRef MangledName, unsigned Order) {
+    llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::initializeDeviceGlobalVarEntryInfo\n";
   assert(CGM.getLangOpts().OpenMPIsDevice && "Initialization of entries is "
                                              "only required for the device "
                                              "code generation.");
@@ -3795,10 +3841,11 @@ void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
   ++OffloadingOrderedEntriesNum;
 }
 
-void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
-    registerDeviceGlobalVarEntryInfo(StringRef MangledName,
+void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::registerDeviceGlobalVarEntryInfo(
+        StringRef MangledName,
                                      llvm::Constant *Addr, QualType Ty,
                                      uint64_t Flags, bool isExternallyVisible) {
+    llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::registerDeviceGlobalVarEntryInfo\n";
   // If we are emitting code for a target, the entry is already initialized,
   // only has to be registered.
   if (CGM.getLangOpts().OpenMPIsDevice) {
@@ -3829,25 +3876,25 @@ bool CGOpenMPRuntime::OffloadEntriesInfoManagerTy::hasDeviceGlobalVarEntryInfo(
   return true;
 }
 
-void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
-    actOnDeviceGlobalVarEntriesInfo(
+void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::actOnDeviceGlobalVarEntriesInfo(
         const OffloadDeviceGlobalVarEntryInfoActTy &Action) {
+    llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::actOnDeviceGlobalVarEntriesInfo\n";
   // Scan all target region entries and perform the provided action.
   for (auto &E : OffloadEntriesDeviceGlobalVar)
     Action(E.first(), E.second);
 }
 
 /// \brief Initialize device function entry.
-void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
-    initializeDeviceFunctionEntryInfo(StringRef MangledName) {
+void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::initializeDeviceFunctionEntryInfo(StringRef MangledName) {
+    llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::initializeDeviceFunctionEntryInfo\n";
   assert(CGM.getLangOpts().OpenMPIsDevice && "Initialization of entries is "
                                              "only required for the device "
                                              "code generation.");
   OffloadEntriesDeviceFunction[MangledName] = OffloadEntryInfoDeviceFunction();
 }
 
-void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
-    registerDeviceFunctionEntryInfo(StringRef MangledName) {
+void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::registerDeviceFunctionEntryInfo(StringRef MangledName) {
+    llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::registerDeviceFunctionEntryInfo\n";
   // If we are emitting code for a target, the entry is already initialized,
   // only has to be registered.
   if (CGM.getLangOpts().OpenMPIsDevice) {
@@ -3871,9 +3918,9 @@ bool CGOpenMPRuntime::OffloadEntriesInfoManagerTy::hasDeviceFunctionEntryInfo(
   return true;
 }
 
-void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::
-    actOnDeviceFunctionEntriesInfo(
+void CGOpenMPRuntime::OffloadEntriesInfoManagerTy::actOnDeviceFunctionEntriesInfo(
         const OffloadDeviceFunctionEntryInfoActTy &Action) {
+    llvm::errs() << "OpenMP::OffloadEntriesInfoManagerTy::actOnDeviceFunctionEntriesInfo\n";
   // Scan all target region entries and perform the provided action.
   for (auto &E : OffloadEntriesDeviceFunction)
     Action(E.first(), E.second);
@@ -3906,6 +3953,7 @@ createOffloadingHelperFunction(CodeGenModule &CGM, StringRef Name,
 
 llvm::GlobalValue *
 CGOpenMPRuntime::getOrCreateGlobalLinkPtr(const VarDecl *VD) {
+    llvm::errs() << "OpenMP::getOrCreateGlobalLinkPtr\n";
   SmallString<64> MN;
   {
     llvm::raw_svector_ostream OS(MN);
@@ -3941,6 +3989,7 @@ CGOpenMPRuntime::getOrCreateGlobalLinkPtr(const VarDecl *VD) {
 
 llvm::Function *
 CGOpenMPRuntime::createOffloadingBinaryDescriptorRegistration() {
+    llvm::errs() << "OpenMP::createOffloadingBinaryDescriptorRegistration\n";
 
   // If we don't have entries or if we are emitting code for the device, we
   // don't need to do anything.
@@ -4059,7 +4108,7 @@ CGOpenMPRuntime::createOffloadingBinaryDescriptorRegistration() {
 }
 
 void CGOpenMPRuntime::createOffloadConfiguration() {
-  llvm::errs() << "CGOpenMPRuntime::createOffloadConfiguration\n";
+    llvm::errs() << "OpenMP::createOffloadConfiguration\n";
   int32_t sub_target_id;
   auto *TgtConfigurationType = cast<llvm::StructType>(
       CGM.getTypes().ConvertTypeForMem(getTgtConfigurationyQTy()));
@@ -4094,7 +4143,6 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   auto Align = CharUnits::fromQuantity(1);
 
   auto &Triple = CGM.getTarget().getTriple();
-
   if (Triple.isSmartNIC()) {
     sub_target_id = 9001;
   } else if (Triple.isHarp()) {
@@ -4107,8 +4155,8 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
     sub_target_id = 0;
   }
 
-  llvm::errs() << "  triple       : " << Triple.getTriple() << "\n";
-  llvm::errs() << "  sub_target_id: " << sub_target_id << "\n";
+  /* llvm::errs() << "  triple       : " << Triple.getTriple() << "\n"; */
+  /* llvm::errs() << "  sub_target_id: " << sub_target_id << "\n"; */
 
   ConstantInitBuilder EntryBuilder(CGM);
   auto EntryInit = EntryBuilder.beginStruct(TgtConfigurationType);
@@ -4171,6 +4219,7 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
 }
 
 void CGOpenMPRuntime::createOffloadEntriesAndInfoMetadata() {
+    llvm::errs() << "OpenMP::createOffloadEntriesAndInfoMetadata\n";
   // Emit the offloading entries and metadata so that the device codegen side
   // can easily figure out what to emit. The produced metadata looks like
   // this:
@@ -4311,6 +4360,7 @@ void CGOpenMPRuntime::createOffloadEntriesAndInfoMetadata() {
 /// \brief Loads all the offload entries information from the host IR
 /// metadata.
 void CGOpenMPRuntime::loadOffloadInfoMetadata() {
+    llvm::errs() << "OpenMP::loadOffloadInfoMetadata\n";
   // If we are in target mode, load the metadata from the host IR. This code has
   // to match the metadaata creation in createOffloadEntriesAndInfoMetadata().
 
@@ -4376,6 +4426,7 @@ void CGOpenMPRuntime::loadOffloadInfoMetadata() {
 }
 
 void CGOpenMPRuntime::emitKmpRoutineEntryT(QualType KmpInt32Ty) {
+    llvm::errs() << "OpenMP::emitKmpRoutineEntryT\n";
   if (!KmpRoutineEntryPtrTy) {
     // Build typedef kmp_int32 (* kmp_routine_entry_t)(kmp_int32, void *); type.
     auto &C = CGM.getContext();
@@ -4399,6 +4450,7 @@ static FieldDecl *addFieldToRecordDecl(ASTContext &C, DeclContext *DC,
 }
 
 QualType CGOpenMPRuntime::getTgtConfigurationyQTy() {
+    llvm::errs() << "OpenMP::getTgtConfigurationyQTy\n";
 
   // Make sure the type of the entry is already created. This is the type we
   // have to create:
@@ -4420,6 +4472,7 @@ QualType CGOpenMPRuntime::getTgtConfigurationyQTy() {
 }
 
 QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
+    llvm::errs() << "OpenMP::getTgtOffloadEntryQTy\n";
 
   // Make sure the type of the entry is already created. This is the type we
   // have to create:
@@ -4449,6 +4502,7 @@ QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
 }
 
 QualType CGOpenMPRuntime::getTgtDeviceImageQTy() {
+    llvm::errs() << "OpenMP::getTgtDeviceImageQTy\n";
   // These are the types we need to build:
   // struct __tgt_device_image{
   // void   *ImageStart;       // Pointer to the target code start.
@@ -4475,6 +4529,7 @@ QualType CGOpenMPRuntime::getTgtDeviceImageQTy() {
 }
 
 QualType CGOpenMPRuntime::getTgtBinaryDescriptorQTy() {
+    llvm::errs() << "OpenMP::getTgtBinaryDescriptorQTy\n";
   // struct __tgt_bin_desc{
   //   int32_t              NumDevices;      // Number of devices supported.
   //   __tgt_device_image   *DeviceImages;   // Arrays of device images
@@ -5115,6 +5170,7 @@ CGOpenMPRuntime::TaskResultTy CGOpenMPRuntime::emitTaskInit(
     CodeGenFunction &CGF, SourceLocation Loc, const OMPExecutableDirective &D,
     llvm::Value *TaskFunction, QualType SharedsTy, Address Shareds,
     const OMPTaskDataTy &Data) {
+    llvm::errs() << "OpenMP::emitTaskInit\n";
   auto &C = CGM.getContext();
   llvm::SmallVector<PrivateDataTy, 4> Privates;
   // Aggregate privates and sort them by the alignment.
@@ -5378,6 +5434,7 @@ void CGOpenMPRuntime::emitTaskLoopCall(CodeGenFunction &CGF, SourceLocation Loc,
                                        QualType SharedsTy, Address Shareds,
                                        const Expr *IfCond,
                                        const OMPTaskDataTy &Data) {
+    llvm::errs() << "OpenMP::emitTaskLoopCall\n";
   if (!CGF.HaveInsertPoint())
     return;
   TaskResultTy Result =
@@ -6329,6 +6386,7 @@ void CGOpenMPRuntime::emitInlinedDirective(CodeGenFunction &CGF,
                                            OpenMPDirectiveKind InnerKind,
                                            const RegionCodeGenTy &CodeGen,
                                            bool HasCancel) {
+    llvm::errs() << "OpenMP::emitInlinedDirective\n";
   if (!CGF.HaveInsertPoint())
     return;
   InlinedOpenMPRegionRAII Region(CGF, CodeGen, InnerKind, HasCancel);
@@ -6363,6 +6421,7 @@ static RTCancelKind getCancellationKind(OpenMPDirectiveKind CancelRegion) {
 void CGOpenMPRuntime::emitCancellationPointCall(
     CodeGenFunction &CGF, SourceLocation Loc,
     OpenMPDirectiveKind CancelRegion) {
+    llvm::errs() << "OpenMP::emitCancellationPointCall\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Build call kmp_int32 __kmpc_cancellationpoint(ident_t *loc, kmp_int32
@@ -6399,6 +6458,7 @@ void CGOpenMPRuntime::emitCancellationPointCall(
 void CGOpenMPRuntime::emitCancelCall(CodeGenFunction &CGF, SourceLocation Loc,
                                      const Expr *IfCond,
                                      OpenMPDirectiveKind CancelRegion) {
+    llvm::errs() << "OpenMP::emitCancelCall\n";
   if (!CGF.HaveInsertPoint())
     return;
   // Build call kmp_int32 __kmpc_cancel(ident_t *loc, kmp_int32 global_tid,
@@ -6474,6 +6534,7 @@ void CGOpenMPRuntime::emitTargetOutlinedFunction(
     llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
     bool IsOffloadEntry, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel) {
+    llvm::errs() << "OpenMP::emitTargetOutlinedFunction\n";
   assert(!ParentName.empty() && "Invalid target region parent name!");
 
   emitTargetOutlinedFunctionHelper(D, ParentName, OutlinedFn, OutlinedFnID,
@@ -6484,6 +6545,7 @@ llvm::Function *
 CGOpenMPRuntime::outlineTargetDirective(const OMPExecutableDirective &D,
                                         StringRef Name,
                                         const RegionCodeGenTy &CodeGen) {
+    llvm::errs() << "OpenMP::outlineTargetDirective\n";
   bool HasDependClause = D.hasClausesOfKind<OMPDependClause>();
   const auto *C = cast<CapturedStmt>(D.getAssociatedStmt());
   if (HasDependClause)
@@ -6511,6 +6573,7 @@ void CGOpenMPRuntime::emitTargetOutlinedFunctionHelper(
     llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
     bool IsOffloadEntry, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel) {
+    llvm::errs() << "OpenMP::emitTargetOutlinedFunctionHelper\n";
   // Create a unique name for the entry function using the source location
   // information of the current target region. The name will be something like:
   //
@@ -6599,6 +6662,7 @@ static llvm::Value *
 emitNumTeamsClauseForTargetDirective(CGOpenMPRuntime &OMPRuntime,
                                      CodeGenFunction &CGF,
                                      const OMPExecutableDirective &D) {
+    llvm::errs() << "OpenMP::emitNumTeamsClauseForTargetDirective\n";
 
   assert(!CGF.getLangOpts().OpenMPIsDevice && "Clauses associated with the "
                                               "teams directive expected to be "
@@ -6663,6 +6727,7 @@ static llvm::Value *
 emitThreadLimitClauseForTargetDirective(CGOpenMPRuntime &OMPRuntime,
                                         CodeGenFunction &CGF,
                                         const OMPExecutableDirective &D) {
+    llvm::errs() << "OpenMP::emitThreadLimitClauseForTargetDirective\n";
 
   assert(!CGF.getLangOpts().OpenMPIsDevice && "Clauses associated with the "
                                               "teams directive expected to be "
@@ -6823,6 +6888,7 @@ static void
 emitMapTypesArray(CodeGenFunction &CGF,
                   const MappableExprsHandler::MapFlagsArrayTy &MapTypes,
                   CGOpenMPRuntime::TargetDataInfo &Info) {
+    llvm::errs() << "OpenMP::emitMapTypesArray\n";
   auto &CGM = CGF.CGM;
   // The map types are always constant so we don't need to generate code to
   // fill arrays. Instead, we create an array constant.
@@ -6878,10 +6944,9 @@ emitOffloadingArrays(CodeGenFunction &CGF,
                      MappableExprsHandler::MapValuesArrayTy &Sizes,
                      MappableExprsHandler::MapFlagsArrayTy &MapTypes,
                      CGOpenMPRuntime::TargetDataInfo &Info) {
+    llvm::errs() << "OpenMP::emitOffloadingArrays\n";
   auto &CGM = CGF.CGM;
   auto &Ctx = CGF.getContext();
-
-  llvm::errs() << "  emitOffloadingArrays\n";
 
   // Reset the array information.
   Info.clearArrayInfo();
@@ -6980,9 +7045,8 @@ static void emitOffloadingArraysArgument(
     CodeGenFunction &CGF, llvm::Value *&BasePointersArrayArg,
     llvm::Value *&PointersArrayArg, llvm::Value *&SizesArrayArg,
     llvm::Value *&MapTypesArrayArg, CGOpenMPRuntime::TargetDataInfo &Info) {
+    llvm::errs() << "OpenMP::emitOffloadingArraysArgument\n";
   auto &CGM = CGF.CGM;
-
-  llvm::errs() << "  emitOffloadingArraysArgument\n";
 
   if (Info.NumberOfPtrs) {
     BasePointersArrayArg = CGF.Builder.CreateConstInBoundsGEP2_32(
@@ -7118,6 +7182,7 @@ void CGOpenMPRuntime::emitTargetNumIterationsCall(
     CodeGenFunction &CGF, const OMPExecutableDirective &D, const Expr *Device,
     const llvm::function_ref<llvm::Value *(
         CodeGenFunction &CGF, const OMPLoopDirective &D)> &SizeEmitter) {
+    llvm::errs() << "OpenMP::emitTargetNumIterationsCall\n";
   OpenMPDirectiveKind Kind = D.getDirectiveKind();
   const OMPExecutableDirective *TD = &D;
   // Get nested teams distribute kind directive, if any.
@@ -7156,6 +7221,7 @@ OMPMapArrays
 CGOpenMPRuntime::generateMapArrays(CodeGenFunction &CGF,
                                    const OMPExecutableDirective &D,
                                    ArrayRef<llvm::Value *> CapturedVars) {
+    llvm::errs() << "OpenMP::generateMapArrays\n";
 
   // Fill up the arrays with all the captured variables.
   OMPMapArrays Maps;
@@ -7311,6 +7377,7 @@ CGOpenMPRuntime::generateMapArrays(CodeGenFunction &CGF,
 
 CGOpenMPRuntime::TargetDataInfo
 CGOpenMPRuntime::emitMapArrays(CodeGenFunction &CGF, OMPMapArrays &Maps) {
+    llvm::errs() << "OpenMP::emitMapArrays\n";
   CGOpenMPRuntime::TargetDataInfo Info;
   emitOffloadingArrays(CGF, Maps.BasePointers, Maps.Pointers, Maps.Sizes,
                        Maps.MapTypes, Info);
@@ -7522,6 +7589,7 @@ void CGOpenMPRuntime::emitTargetCall(
     llvm::Value *OutlinedFn, llvm::Value *OutlinedFnID, const Expr *IfCond,
     const Expr *Device, ArrayRef<llvm::Value *> CapturedVars,
     OMPMapArrays &MapArrays) {
+    llvm::errs() << "OpenMP::emitTargetCall\n";
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -8593,6 +8661,7 @@ void MappableExprsHandler::generateDefaultMapInfo(
 
 void CGOpenMPRuntime::scanForTargetRegionsFunctions(const Stmt *S,
                                                     StringRef ParentName) {
+    /* llvm::errs() << "OpenMP::scanForTargetRegionsFunctions\n"; */
   if (!S)
     return;
 
@@ -8687,6 +8756,7 @@ void CGOpenMPRuntime::scanForTargetRegionsFunctions(const Stmt *S,
 }
 
 bool CGOpenMPRuntime::emitTargetFunctions(GlobalDecl GD) {
+    /* llvm::errs() << "OpenMP::emitTargetFunctions\n"; */
   auto &FD = *cast<FunctionDecl>(GD.getDecl());
 
   // If emitting code for the host, we do not process FD here. Instead we do
@@ -8709,6 +8779,7 @@ bool CGOpenMPRuntime::emitTargetFunctions(GlobalDecl GD) {
 }
 
 bool CGOpenMPRuntime::emitTargetGlobalVariable(GlobalDecl GD) {
+    /* llvm::errs() << "OpenMP::emitTargetGlobalVariable\n"; */
   if (!CGM.getLangOpts().OpenMPIsDevice)
     return false;
 
@@ -8737,6 +8808,7 @@ bool CGOpenMPRuntime::emitTargetGlobalVariable(GlobalDecl GD) {
 }
 
 bool CGOpenMPRuntime::emitTargetGlobal(GlobalDecl GD) {
+    /* llvm::errs() << "OpenMP::emitTargetGlobal\n"; */
   auto *VD = GD.getDecl();
   if (isa<FunctionDecl>(VD))
     return emitTargetFunctions(GD);
@@ -8766,6 +8838,7 @@ enum OpenMPOffloadingDeclareTargetFlags {
 void CGOpenMPRuntime::registerCtorDtorEntry(unsigned DeviceID, unsigned FileID,
                                             StringRef RegionName, unsigned Line,
                                             llvm::Function *Fn, bool IsDtor) {
+    llvm::errs() << "OpenMP::registerCtorDtorEntry\n";
   OffloadEntriesInfoManager.registerTargetRegionEntryInfo(
       DeviceID, FileID, RegionName, Line, Fn, Fn,
       IsDtor ? OMP_DECLARE_TARGET_DTOR : OMP_DECLARE_TARGET_CTOR);
@@ -8774,6 +8847,7 @@ void CGOpenMPRuntime::registerCtorDtorEntry(unsigned DeviceID, unsigned FileID,
 bool CGOpenMPRuntime::emitDeviceCtorDtor(const VarDecl &D,
                                          llvm::GlobalVariable *Addr,
                                          bool PerformInit) {
+    llvm::errs() << "OpenMP::emitDeviceCtorDtor\n";
   // If this is not an OpenMP device, don't have to generate anything.
   if (!CGM.getLangOpts().OpenMPIsDevice)
     return false;
@@ -8858,6 +8932,7 @@ bool CGOpenMPRuntime::emitDeviceCtorDtor(const VarDecl &D,
 void CGOpenMPRuntime::registerDeviceCtorDtorLaunching(
     CodeGenFunction &CGF, const VarDecl &D, llvm::GlobalVariable *Addr,
     bool PerformInit) {
+    llvm::errs() << "OpenMP::registerDeviceCtorDtorLaunching\n";
   // If we are not producing code for the host or we don't have any devices
   // specified, we don't have to launch anything.
   if (CGM.getLangOpts().OpenMPIsDevice ||
@@ -8875,6 +8950,7 @@ void CGOpenMPRuntime::registerDeviceCtorDtorLaunching(
 }
 
 void CGOpenMPRuntime::registerTargetFunctionDefinition(GlobalDecl GD) {
+    llvm::errs() << "OpenMP::registerTargetFunctionDefinition\n";
   // We don't have to register anything if compiling for the host with no target
   // devices specified.
   if (!CGM.getLangOpts().OpenMPIsDevice &&
@@ -8889,6 +8965,7 @@ void CGOpenMPRuntime::registerTargetFunctionDefinition(GlobalDecl GD) {
 
 void CGOpenMPRuntime::registerTargetVariableDefinition(const VarDecl *D,
                                                        llvm::Constant *Addr) {
+    llvm::errs() << "OpenMP::registerTargetVariableDefinition\n";
   // We don't have to register anything if compiling for the host with no target
   // devices specified.
   if (!CGM.getLangOpts().OpenMPIsDevice &&
@@ -8904,6 +8981,7 @@ void CGOpenMPRuntime::registerTargetVariableDefinition(const VarDecl *D,
 
 void CGOpenMPRuntime::registerGlobalReplacement(StringRef MangledName,
                                                 llvm::GlobalValue *NewVal) {
+    llvm::errs() << "OpenMP::registerGlobalReplacement\n";
   // We don't have to register anything if compiling for the host with no target
   // devices specified.
   if (!CGM.getLangOpts().OpenMPIsDevice &&
@@ -8926,6 +9004,7 @@ void CGOpenMPRuntime::registerGlobalReplacement(StringRef MangledName,
 }
 
 llvm::Function *CGOpenMPRuntime::emitRegistrationFunction() {
+    llvm::errs() << "OpenMP::emitRegistrationFunction\n";
   auto &Ctx = CGM.getContext();
 
   // Figure out all the declare target data that should be registered as such.
@@ -9061,6 +9140,7 @@ void CGOpenMPRuntime::emitTeamsCall(CodeGenFunction &CGF,
                                     const OMPExecutableDirective &D,
                                     SourceLocation Loc, llvm::Value *OutlinedFn,
                                     ArrayRef<llvm::Value *> CapturedVars) {
+    llvm::errs() << "OpenMP::emitTeamsCall\n";
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -9084,6 +9164,7 @@ void CGOpenMPRuntime::emitNumTeamsClause(CodeGenFunction &CGF,
                                          const Expr *NumTeams,
                                          const Expr *ThreadLimit,
                                          SourceLocation Loc) {
+    llvm::errs() << "OpenMP::emitNumTeamsClause\n";
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -9209,12 +9290,9 @@ TranslateStructEntries(CodeGenFunction &CGF, llvm::IntegerType *SizeTy,
 void CGOpenMPRuntime::emitTargetDataCalls(
     CodeGenFunction &CGF, const OMPExecutableDirective &D, const Expr *IfCond,
     const Expr *Device, const RegionCodeGenTy &CodeGen, TargetDataInfo &Info) {
+    llvm::errs() << "OpenMP::emitTargetDataCalls\n";
   if (!CGF.HaveInsertPoint())
     return;
-
-  /* marcio */
-  llvm::errs() << "CGOpenMPRuntime::emitTargetDataCalls\n";
-  /* oicram */
 
   // Action used to replace the default codegen action and turn privatization
   // off.
@@ -9351,12 +9429,9 @@ void CGOpenMPRuntime::emitTargetDataCalls(
 void CGOpenMPRuntime::emitTargetDataStandAloneCall(
     CodeGenFunction &CGF, const OMPExecutableDirective &D, const Expr *IfCond,
     const Expr *Device) {
+  llvm::errs() << "CGOpenMPRuntime::emitTargetDataStandAloneCall\n";
   if (!CGF.HaveInsertPoint())
     return;
-
-  /* marcio */
-  llvm::errs() << "CGOpenMPRuntime::emitTargetDataStandAloneCall\n";
-  /* oicram */
 
   assert((isa<OMPTargetEnterDataDirective>(D) ||
           isa<OMPTargetExitDataDirective>(D) ||
@@ -9622,6 +9697,7 @@ emitX86DeclareSimdFunction(const FunctionDecl *FD, llvm::Function *Fn,
 
 void CGOpenMPRuntime::emitDeclareSimdFunction(const FunctionDecl *FD,
                                               llvm::Function *Fn) {
+    llvm::errs() << "OpenMP::emitDeclareSimdFunction\n";
   ASTContext &C = CGM.getContext();
   FD = FD->getCanonicalDecl();
   // Map params to their positions in function decl.
@@ -9833,6 +9909,7 @@ void CGOpenMPRuntime::registerTrackedFunction() {
 void CGOpenMPRuntime::emitCall(CodeGenFunction &CGF, llvm::Value *Callee,
                                ArrayRef<llvm::Value *> Args,
                                SourceLocation Loc) const {
+    llvm::errs() << "OpenMP::emitCall\n";
   auto DL = ApplyDebugLocation::CreateDefaultArtificial(CGF, Loc);
 
   if (auto *Fn = dyn_cast<llvm::Function>(Callee)) {
@@ -9847,6 +9924,7 @@ void CGOpenMPRuntime::emitCall(CodeGenFunction &CGF, llvm::Value *Callee,
 void CGOpenMPRuntime::emitOutlinedFunctionCall(
     CodeGenFunction &CGF, SourceLocation Loc, llvm::Value *OutlinedFn,
     ArrayRef<llvm::Value *> Args) const {
+    llvm::errs() << "OpenMP::emitOutlinedFunctionCall\n";
   assert(Loc.isValid() && "Outlined function call location must be valid.");
   emitCall(CGF, OutlinedFn, Args, Loc);
 }

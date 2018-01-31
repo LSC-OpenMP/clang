@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CGCleanup.h"
 #include "CGOpenMPRuntimeOCL.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
@@ -28,6 +29,97 @@ using namespace clang;
 using namespace CodeGen;
 
 namespace {
+
+/// \brief Base class for handling code generation inside OpenMP regions.
+class CGOpenMPRegionInfo : public CodeGenFunction::CGCapturedStmtInfo {
+public:
+  /// \brief Kinds of OpenMP regions used in codegen.
+  enum CGOpenMPRegionKind {
+    /// \brief Region with outlined function for standalone 'parallel'
+    /// directive.
+    ParallelOutlinedRegion,
+    /// \brief Region with outlined function for standalone 'simd'
+    /// directive.
+    SimdOutlinedRegion,
+    /// \brief Region with outlined function for standalone 'task' directive.
+    TaskOutlinedRegion,
+    /// \brief Region for constructs that do not require function outlining,
+    /// like 'for', 'sections', 'atomic' etc. directives.
+    InlinedRegion,
+    /// \brief Region with outlined function for standalone 'target' directive.
+    TargetRegion,
+  };
+
+  CGOpenMPRegionInfo(const CapturedStmt &CS,
+                     const CGOpenMPRegionKind RegionKind,
+                     const RegionCodeGenTy &CodeGen, OpenMPDirectiveKind Kind,
+                     bool HasCancel)
+      : CGCapturedStmtInfo(CS, CR_OpenMP), RegionKind(RegionKind),
+        CodeGen(CodeGen), Kind(Kind), HasCancel(HasCancel) {}
+
+  CGOpenMPRegionInfo(const CGOpenMPRegionKind RegionKind,
+                     const RegionCodeGenTy &CodeGen, OpenMPDirectiveKind Kind,
+                     bool HasCancel)
+      : CGCapturedStmtInfo(CR_OpenMP), RegionKind(RegionKind), CodeGen(CodeGen),
+        Kind(Kind), HasCancel(HasCancel) {}
+
+  /// \brief Emit the captured statement body.
+  void EmitBody(CodeGenFunction &CGF, const Stmt *S) override;
+
+  CGOpenMPRegionKind getRegionKind() const { return RegionKind; }
+
+  OpenMPDirectiveKind getDirectiveKind() const { return Kind; }
+
+  bool hasCancel() const { return HasCancel; }
+
+  static bool classof(const CGCapturedStmtInfo *Info) {
+    return Info->getKind() == CR_OpenMP;
+  }
+
+  ~CGOpenMPRegionInfo() override = default;
+
+protected:
+  CGOpenMPRegionKind RegionKind;
+  RegionCodeGenTy CodeGen;
+  OpenMPDirectiveKind Kind;
+  bool HasCancel;
+};
+
+class CGOpenMPOutlinedRegionInfo final : public CGOpenMPRegionInfo {
+public:
+  CGOpenMPOutlinedRegionInfo(const CapturedStmt &CS, const VarDecl *ThreadIDVar,
+                             const RegionCodeGenTy &CodeGen,
+                             OpenMPDirectiveKind Kind, bool HasCancel)
+      : CGOpenMPRegionInfo(CS, ParallelOutlinedRegion, CodeGen, Kind,
+                           HasCancel),
+        ThreadIDVar(ThreadIDVar) {
+    assert(ThreadIDVar != nullptr && "No ThreadID in OpenMP region.");
+  }
+
+  static bool classof(const CGCapturedStmtInfo *Info) {
+    return CGOpenMPRegionInfo::classof(Info) &&
+           cast<CGOpenMPRegionInfo>(Info)->getRegionKind() ==
+               ParallelOutlinedRegion;
+  }
+
+private:
+  /// \brief A variable or parameter storing global thread id for OpenMP
+  /// constructs.
+  const VarDecl *ThreadIDVar;
+};
+
+void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt *S) {
+    llvm::errs() << "OCL::EmitBody for\n";
+  if (!CGF.HaveInsertPoint())
+    return;
+  /* CGF.EHStack.pushTerminate(); */
+  /* CodeGen(CGF); */
+  /* TODO: Insert call to isl & generate code for dispatch kernel. */
+  S->printPretty(llvm::errs(), nullptr, PrintingPolicy(CGF.getContext().getLangOpts()), 4);
+  /* CGF.EHStack.popTerminate(); */
+}
+
+
 //
 // Some assets used by OpenMPRuntimeOCL
 //
@@ -136,6 +228,35 @@ public:
   }
 };
 
+static llvm::Value *emitParallelOCLOutlinedFunction(
+    CodeGenModule &CGM, const OMPExecutableDirective &D,
+    const VarDecl *ThreadIDVar, OpenMPDirectiveKind InnermostKind,
+    const RegionCodeGenTy &CodeGen, unsigned CaptureLevel,
+    unsigned ImplicitParamStop) {
+    llvm::errs() << "OCL::emitParallelOCLOutlinedFunction\n";
+  assert(ThreadIDVar->getType()->isPointerType() &&
+         "thread id variable must be of type kmp_int32 *");
+  const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>() &&
+      isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+    CS = cast<CapturedStmt>(CS->getCapturedStmt());
+  CodeGenFunction CGF(CGM, true);
+  bool HasCancel = false;
+  if (auto *OPD = dyn_cast<OMPParallelDirective>(&D))
+    HasCancel = OPD->hasCancel();
+  else if (auto *OPSD = dyn_cast<OMPParallelSectionsDirective>(&D))
+    HasCancel = OPSD->hasCancel();
+  else if (auto *OPFD = dyn_cast<OMPParallelForDirective>(&D))
+    HasCancel = OPFD->hasCancel();
+  CGOpenMPOutlinedRegionInfo CGInfo(*CS, ThreadIDVar,
+                            CodeGen, InnermostKind, HasCancel);
+  CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(CGF, &CGInfo);
+  llvm::errs() << "OCL::Calling GenerateOpenMPCapturedStmtFunction\n";
+  return CGF.GenerateOpenMPCapturedStmtFunction(
+      *CS, /*UseCapturedArgumentsOnly=*/false, CaptureLevel, ImplicitParamStop);
+}
+
+
 CGOpenMPRuntimeOCL::CGOpenMPRuntimeOCL(CodeGenModule &CGM)
     : CGOpenMPRuntime(CGM) {
   llvm::errs() << "Creating OpenMPRuntimeOCL object\n";
@@ -144,24 +265,28 @@ CGOpenMPRuntimeOCL::CGOpenMPRuntimeOCL(CodeGenModule &CGM)
 }
 
 void CGOpenMPRuntimeOCL::emitMasterHeader(CodeGenFunction &CGF) {
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitMasterHeader\n";
 }
 
 void CGOpenMPRuntimeOCL::emitMasterFooter() {
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitMasterFooter\n";
+  // only close master region, if one is open
+  if (MasterContBlock == nullptr)
+    return;
+  currentCGF->EmitBranch(MasterContBlock);
+  currentCGF->EmitBlock(MasterContBlock, true);
+  MasterContBlock = nullptr;
+  return;
 }
 
 void CGOpenMPRuntimeOCL::emitNumThreadsHeader(CodeGenFunction &CGF,
                                               llvm::Value *NumThreads) {
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitNumThreadsHeader\n";
 }
 
 void CGOpenMPRuntimeOCL::emitNumThreadsFooter(CodeGenFunction &CGF) {
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitNumThreadsFooter\n";
 }
 
 bool CGOpenMPRuntimeOCL::targetHasInnerOutlinedFunction(
     OpenMPDirectiveKind kind) {
+    llvm::errs() << "OCL::targetHasInnerOutlinedFunction\n";
   switch (kind) {
   case OpenMPDirectiveKind::OMPD_target_parallel:
   case OpenMPDirectiveKind::OMPD_target_parallel_for:
@@ -180,6 +305,7 @@ bool CGOpenMPRuntimeOCL::targetHasInnerOutlinedFunction(
 
 bool CGOpenMPRuntimeOCL::teamsHasInnerOutlinedFunction(
     OpenMPDirectiveKind kind) {
+    llvm::errs() << "OCL::teamsHasInnerOutlinedFunction\n";
   switch (kind) {
   case OpenMPDirectiveKind::OMPD_teams_distribute_parallel_for:
   case OpenMPDirectiveKind::OMPD_teams_distribute_parallel_for_simd:
@@ -195,7 +321,7 @@ bool CGOpenMPRuntimeOCL::teamsHasInnerOutlinedFunction(
 void CGOpenMPRuntimeOCL::GenOpenCLArgMetadata(const RecordDecl *FD,
                                               llvm::Function *Fn,
                                               CodeGenModule &CGM) {
-  llvm::errs() << "CGOpenMPRuntimeOCL::GenOpenCLArgMetadata\n";
+  llvm::errs() << "OCL::GenOpenCLArgMetadata\n";
   CodeGenFunction CGF(CGM);
   llvm::LLVMContext &Context = CGM.getLLVMContext();
   CGBuilderTy Builder = CGF.Builder;
@@ -365,40 +491,39 @@ void CGOpenMPRuntimeOCL::emitTargetOutlinedFunction(
   if (!IsOffloadEntry) // Nothing to do.
     return;
 
-  llvm::errs() << "CGOpenMPRuntimeOCL::emitTargetOutlinedFunction {\n";
-
+  llvm::errs() << "OCL::emitTargetOutlinedFunction {\n";
   assert(!ParentName.empty() && "Invalid target region parent name!");
-  CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt());
-  for (auto capture : CS.captures()) {
-    globals.insert(capture.getCapturedVar()->getDeclName());
-  }
+  /* CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt()); */
+  /* for (auto capture : CS.captures()) { */
+  /*   globals.insert(capture.getCapturedVar()->getDeclName()); */
+  /* } */
 
-  OutlinedFunctionRAII RAII(*this, CGM);
-  class MasterPrePostActionTy : public PrePostActionTy {
-    CGOpenMPRuntimeOCL &RT;
+  /* OutlinedFunctionRAII RAII(*this, CGM); */
+  /* class MasterPrePostActionTy : public PrePostActionTy { */
+  /*   CGOpenMPRuntimeOCL &RT; */
 
-  public:
-    MasterPrePostActionTy(CGOpenMPRuntimeOCL &RT) : RT(RT) {}
-    void Enter(CodeGenFunction &CGF) override { RT.emitMasterHeader(CGF); }
-    void Exit(CodeGenFunction &CGF) override { RT.emitMasterFooter(); }
-  } Action(*this);
+  /* public: */
+  /*   MasterPrePostActionTy(CGOpenMPRuntimeOCL &RT) : RT(RT) {} */
+  /*   void Enter(CodeGenFunction &CGF) override { RT.emitMasterHeader(CGF); } */
+  /*   void Exit(CodeGenFunction &CGF) override { RT.emitMasterFooter(); } */
+  /* } Action(*this); */
 
-  if (!targetHasInnerOutlinedFunction(D.getDirectiveKind())) {
-    CodeGen.setAction(Action);
-  }
+  /* if (!targetHasInnerOutlinedFunction(D.getDirectiveKind())) { */
+  /*   CodeGen.setAction(Action); */
+  /* } */
   emitTargetOutlinedFunctionHelper(D, ParentName, OutlinedFn, OutlinedFnID,
                                    IsOffloadEntry, CodeGen, 0);
 
-  OutlinedFn->setCallingConv(llvm::CallingConv::C); // CallingConv::SPIR_KERNEL
+  OutlinedFn->setCallingConv(llvm::CallingConv::C);
   OutlinedFn->addFnAttr(llvm::Attribute::NoUnwind);
   OutlinedFn->removeFnAttr(llvm::Attribute::OptimizeNone);
 
-  llvm::errs() << "Dumping outlined function:\n";
+  llvm::errs() << "OCL::Dumping outlined function:\n";
   OutlinedFn->dump();
 
-  GenOpenCLArgMetadata(CS.getCapturedRecordDecl(), OutlinedFn, CGM);
+  /* TODO: Check if this is necessary */
+  /* GenOpenCLArgMetadata(CS.getCapturedRecordDecl(), OutlinedFn, CGM); */
 
-  llvm::errs() << "}\n";
 }
 
 llvm::Value *CGOpenMPRuntimeOCL::emitParallelOutlinedFunction(
@@ -406,7 +531,7 @@ llvm::Value *CGOpenMPRuntimeOCL::emitParallelOutlinedFunction(
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel, unsigned ImplicitParamStop) {
 
-  llvm::errs() << "CGOpenMPRuntimeOCL::emitParallelOutlinedFunction {\n";
+  llvm::errs() << "OCL::emitParallelOutlinedFunction\n";
   this->emitMasterFooter();
 
   llvm::DenseSet<const VarDecl *> Lastprivates;
@@ -430,8 +555,15 @@ llvm::Value *CGOpenMPRuntimeOCL::emitParallelOutlinedFunction(
   bool wasAlreadyParallel = inParallel;
   inParallel = true;
   OutlinedFunctionRAII RAII(*this, CGM);
-  llvm::Value *OutlinedFn = CGOpenMPRuntime::emitParallelOutlinedFunction(
-      D, ThreadIDVar, InnermostKind, CodeGen, CaptureLevel, ImplicitParamStop);
+
+  Stmt *Body = D.getAssociatedStmt();
+  if (auto *CS = dyn_cast_or_null<CapturedStmt>(Body)) {
+    Body = CS->getCapturedStmt();
+  }
+
+  llvm::Value *OutlinedFn = emitParallelOCLOutlinedFunction(
+      CGM, D, ThreadIDVar, InnermostKind, CodeGen, CaptureLevel, ImplicitParamStop);
+
   inParallel = wasAlreadyParallel;
   if (auto Fn = dyn_cast<llvm::Function>(OutlinedFn)) {
     Fn->removeFnAttr(llvm::Attribute::NoInline);
@@ -439,10 +571,6 @@ llvm::Value *CGOpenMPRuntimeOCL::emitParallelOutlinedFunction(
     Fn->addFnAttr(llvm::Attribute::AlwaysInline);
     Fn->addFnAttr(llvm::Attribute::NoUnwind);
   }
-
-  // llvm::errs() << "Dumping Parallel Outlined Function:\n";
-  // OutlinedFn->dump();
-  // llvm::errs() << "}\n";
 
   return OutlinedFn;
 }
@@ -455,7 +583,7 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
-  llvm::errs() << "CGOpenMPRuntimeOCL::emitParallelCall {\n";
+  llvm::errs() << "OCL::emitParallelCall\n";
 
   llvm::SmallVector<llvm::Value *, 16> RealArgs;
   RealArgs.push_back(
@@ -468,7 +596,7 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
 
   llvm::Function *F = cast<llvm::Function>(OutlinedFn);
 
-  llvm::errs() << "Dumping Function Type:\n";
+  llvm::errs() << "Function Type:\n";
   F->getFunctionType()->dump();
   llvm::errs() << "  number of params: " << F->getFunctionType()->getNumParams()
                << "\n";
@@ -490,7 +618,7 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
         CGF.Builder.getInt32(1 << 0)}; //CLK_LOCAL_MEM_FENCE   0x01
     CGF.EmitRuntimeCall(createRuntimeFunction(write_mem_fence), arg);
   }
-  llvm::errs() << "Dumping Args:\n";
+  llvm::errs() << "Args:\n";
   for (llvm::Value *arg : RealArgs) {
     arg->dump();
   }
@@ -498,7 +626,6 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
   CGF.EmitCallOrInvoke(OutlinedFn, RealArgs);
 
   if (isTargetParallel) {
-    llvm::errs() << "}\n";
     return;
   }
 
@@ -525,7 +652,6 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
     emitNumThreadsFooter(CGF);
     NumThreads = nullptr;
   }
-  llvm::errs() << "}\n";
 }
 
 llvm::Value *CGOpenMPRuntimeOCL::emitTeamsOutlinedFunction(
@@ -533,7 +659,7 @@ llvm::Value *CGOpenMPRuntimeOCL::emitTeamsOutlinedFunction(
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel, unsigned ImplicitParamStop) {
 
-  llvm::errs() << "CGOpenMPRuntimeOCL::emitTeamsOutlinedFunction {\n";
+  llvm::errs() << "OCL::emitTeamsOutlinedFunction\n";
 
   OutlinedFunctionRAII RAII(*this, CGM);
   class TeamsPrePostActionTy : public PrePostActionTy {
@@ -555,9 +681,6 @@ llvm::Value *CGOpenMPRuntimeOCL::emitTeamsOutlinedFunction(
     Fn->removeFnAttr(llvm::Attribute::OptimizeNone);
     Fn->addFnAttr(llvm::Attribute::AlwaysInline);
   }
-  // llvm::errs() << "Dumping Teams Outlined Function: \n";
-  // OutlinedFn->dump();
-  // llvm::errs() << "}\n";
   return OutlinedFn;
 }
 
@@ -569,7 +692,7 @@ void CGOpenMPRuntimeOCL::emitTeamsCall(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
-  llvm::errs() << "CGOpenMPRuntimeOCL::emitTeamsCall {\n";
+  llvm::errs() << "OCL::emitTeamsCall {\n";
   emitMasterFooter();
   llvm::SmallVector<llvm::Value *, 16> OutlinedFnArgs;
   OutlinedFnArgs.push_back(
@@ -589,7 +712,7 @@ void CGOpenMPRuntimeOCL::emitMasterRegion(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitMasterRegion\n";
+  llvm::errs() << "OCL::emitMasterRegion\n";
   emitMasterHeader(CGF);
   emitInlinedDirective(CGF, OMPD_master, MasterOpGen);
   emitMasterFooter();
@@ -600,6 +723,7 @@ void CGOpenMPRuntimeOCL::emitBarrierCall(CodeGenFunction &CGF,
                                          OpenMPDirectiveKind Kind,
                                          bool EmitChecks,
                                          bool ForceSimpleCall) {
+    llvm::errs() << "OCL::emitBarrierCall\n";
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -614,14 +738,14 @@ void CGOpenMPRuntimeOCL::emitForStaticInit(
     const OpenMPScheduleTy &ScheduleKind,
     const CGOpenMPRuntime::StaticRTInput &Values) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::EmitForStaticInit\n";
+  llvm::errs() << "OCL::EmitForStaticInit\n";
 }
 
 void CGOpenMPRuntimeOCL::emitForStaticFinish(CodeGenFunction &CGF,
                                              SourceLocation Loc,
                                              bool CoalescedDistSchedule) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::EmitForStaticFinish\n";
+  llvm::errs() << "OCL::EmitForStaticFinish\n";
 }
 
 void CGOpenMPRuntimeOCL::emitForDispatchInit(
@@ -645,14 +769,14 @@ void CGOpenMPRuntimeOCL::emitDistributeStaticInit(
     OpenMPDistScheduleClauseKind SchedKind,
     const CGOpenMPRuntime::StaticRTInput &Values, bool Coalesced) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitDistributeStaticInit\n";
+  llvm::errs() << "OCL::emitDistributeStaticInit\n";
 }
 
 void CGOpenMPRuntimeOCL::emitNumThreadsClause(CodeGenFunction &CGF,
                                               llvm::Value *NumThreads,
                                               SourceLocation Loc) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitNumThreadsClause\n";
+  llvm::errs() << "OCL::emitNumThreadsClause\n";
 }
 
 void CGOpenMPRuntimeOCL::emitNumTeamsClause(CodeGenFunction &CGF,
@@ -660,7 +784,7 @@ void CGOpenMPRuntimeOCL::emitNumTeamsClause(CodeGenFunction &CGF,
                                             const Expr *ThreadLimit,
                                             SourceLocation Loc) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitNumTeamsClause\n";
+  llvm::errs() << "OCL::emitNumTeamsClause\n";
 }
 
 bool CGOpenMPRuntimeOCL::isStaticNonchunked(
@@ -692,20 +816,20 @@ void CGOpenMPRuntimeOCL::emitInlinedDirective(CodeGenFunction &CGF,
                                               const RegionCodeGenTy &CodeGen,
                                               bool HasCancel) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::emitInLinedDirective\n";
+  llvm::errs() << "OCL::emitInLinedDirective\n";
 }
 
 void CGOpenMPRuntimeOCL::createOffloadEntry(llvm::Constant *ID,
                                             llvm::Constant *Addr, uint64_t Size,
                                             uint64_t Flags) {
 
-  // llvm::errs() << "CGOpenMPRuntimeOCL::createOffloadEntry\n";
+  llvm::errs() << "eOCL::createOffloadEntry\n";
 }
 
 void CGOpenMPRuntimeOCL::EmitOMPLoopAsCLKernel(CodeGenFunction &CGF,
                                                const OMPLoopDirective &S) {
 
-  llvm::errs() << "CGOpenMPRuntimeOCL::EmitOMPLoopAsCLKernel\n";
+  llvm::errs() << "OCL::EmitOMPLoopAsCLKernel\n";
 
   bool verbose = true; /* change to false on release */
   bool tile = true;

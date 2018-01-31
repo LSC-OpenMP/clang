@@ -346,6 +346,7 @@ static llvm::Function *emitOutlinedFunctionPrologue(
     llvm::DenseMap<const Decl *, std::pair<const Expr *, llvm::Value *>>
         &VLASizes,
     llvm::Value *&CXXThisValue, const FunctionOptions &FO) {
+    llvm::errs() << "Stm::emitOutlinedFunctionPrologue\n";
   const CapturedDecl *CD = FO.S->getCapturedDecl();
   const RecordDecl *RD = FO.S->getCapturedRecordDecl();
   assert(CD->hasBody() && "missing CapturedDecl body");
@@ -514,6 +515,7 @@ static llvm::Function *emitOutlinedFunctionPrologue(
 llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
     const CapturedStmt &S, bool UseCapturedArgumentsOnly, unsigned CaptureLevel,
     unsigned ImplicitParamStop, bool NonAliasedMaps) {
+    llvm::errs() << "Stm::GenerateOpenMPCapturedStmtFunction\n";
   assert(
       CapturedStmtInfo &&
       "CapturedStmtInfo should be set when generating the captured function");
@@ -544,6 +546,7 @@ llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
   for (const auto &VLASizePair : VLASizes)
     VLASizeMap[VLASizePair.second.first] = VLASizePair.second.second;
   PGO.assignRegionCounters(GlobalDecl(CD), F);
+  llvm::errs() << "Stm::Call CapturedStmtInfo->EmitBody\n";
   CapturedStmtInfo->EmitBody(*this, CD->getBody());
   FinishFunction(CD->getBodyRBrace());
   if (!NeedWrapperFunction)
@@ -2121,6 +2124,7 @@ void CodeGenFunction::EmitOMPForOuterLoop(
     const OpenMPScheduleTy &ScheduleKind, bool IsMonotonic,
     const OMPLoopDirective &S, OMPPrivateScope &LoopScope, bool Ordered,
     Address LB, Address UB, Address ST, Address IL, llvm::Value *Chunk) {
+    llvm::errs() << "Stm::EmitOMPForOuterLoop\n";
   auto &RT = CGM.getOpenMPRuntime();
 
   // Dynamic scheduling of the outer loop (dynamic, guided, auto, runtime).
@@ -2242,6 +2246,7 @@ void CodeGenFunction::EmitOMPDistributeOuterLoop(
     OpenMPDistScheduleClauseKind ScheduleKind, const OMPLoopDirective &S,
     OMPPrivateScope &LoopScope, Address LB, Address UB, Address ST, Address IL,
     llvm::Value *Chunk, const RegionCodeGenTy &CodeGenDistributeLoopContent) {
+    llvm::errs() << "Stm::EmitOMPDistributeOuterLoop\n";
 
   auto &RT = CGM.getOpenMPRuntime();
 
@@ -2440,7 +2445,6 @@ struct ScheduleKindModifiersTy {
 } // namespace
 
 bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
-  llvm::errs() << "enter CodeGenFunction::EmitOMPWorksharingLoop\n";
 
   // Emit the loop iteration variable.
   auto IVExpr = cast<DeclRefExpr>(S.getIterationVariable());
@@ -3014,9 +3018,6 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     const OMPParallelForDirective &S) {
   // Emit directive as a combined directive that consists of two implicit
   // directives: 'parallel' with 'for' directive.
-  /* marcio */
-  llvm::errs() << "Enter CodeGenFunction::EmitOMPParallelForDirective\n";
-  /* oicram */
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     OMPCancelStackRAII CancelRegion(CGF, OMPD_parallel_for, S.hasCancel());
     CGF.EmitOMPWorksharingLoop(S);
@@ -3026,21 +3027,16 @@ void CodeGenFunction::EmitOMPParallelForDirective(
     CGM.getOpenMPRuntime().createFPGAInfo(S);
 
   emitCommonOMPParallelDirective(*this, S, OMPD_for, CodeGen);
-  /* marcio */
-  llvm::errs() << "Leave CodeGenFunction::EmitOMPParallelForDirective\n";
-  /* oicram */
 }
 
 void CodeGenFunction::EmitOMPParallelForSimdDirective(
     const OMPParallelForSimdDirective &S) {
   // Emit directive as a combined directive that consists of two implicit
   // directives: 'parallel' with 'for' directive.
-  llvm::errs() << "enter CodeGenFunction::EmitOMPParallelForSimdDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     CGF.EmitOMPWorksharingLoop(S);
   };
   emitCommonOMPParallelDirective(*this, S, OMPD_simd, CodeGen);
-  llvm::errs() << "Leave CodeGenFunction::EmitOMPParallelForSimdDirective\n";
 }
 
 void CodeGenFunction::EmitOMPParallelSectionsDirective(
@@ -3467,6 +3463,7 @@ void CodeGenFunction::EmitOMPLastprivateUpdateDirective(
 void CodeGenFunction::EmitOMPDistributeLoop(
     const OMPLoopDirective &S,
     const RegionCodeGenTy &CodeGenDistributeLoopContent) {
+    llvm::errs() << "Stm::EmitOMPDistributeLoop\n";
   // Emit the loop iteration variable.
   auto IVExpr = cast<DeclRefExpr>(S.getIterationVariable());
   auto IVDecl = cast<VarDecl>(IVExpr->getDecl());
@@ -4321,6 +4318,7 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
 
 void TargetCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
                    const OMPTargetDirective &S) {
+    llvm::errs() << "Stm::TargetCodegen\n";
   CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
   (void)CGF.EmitOMPFirstprivateClause(S, PrivateScope);
   CGF.EmitOMPPrivateClause(S, PrivateScope);
@@ -4336,6 +4334,7 @@ void TargetCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
 void CodeGenFunction::EmitOMPTargetDeviceFunction(CodeGenModule &CGM,
                                                   StringRef ParentName,
                                                   const OMPTargetDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetDeviceFunction\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetCodegen(CGF, Action, S);
   };
@@ -4363,6 +4362,7 @@ generateCapturedVarsAndMapArrays(CodeGenFunction &CGF,
 }
 
 void CodeGenFunction::EmitOMPTargetDirective(const OMPTargetDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetCodegen(CGF, Action, S);
   };
@@ -4382,6 +4382,7 @@ void CodeGenFunction::EmitOMPTargetDirective(const OMPTargetDirective &S) {
 
 static void TargetParallelCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
                                   const OMPTargetParallelDirective &S) {
+    llvm::errs() << "Stm::TargetParallelCodegen\n";
   Action.Enter(CGF);
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
@@ -4405,6 +4406,7 @@ void CodeGenFunction::EmitOMPTargetParallelDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetParallelDirective &S) {
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
+      llvm::errs() << "Stm::EmitOMPTargetParallelDeviceFunction\n";
     TargetParallelCodegen(CGF, Action, S);
   };
   llvm::Function *Fn;
@@ -4418,6 +4420,7 @@ void CodeGenFunction::EmitOMPTargetParallelDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetParallelDirective(
     const OMPTargetParallelDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetParallelDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetParallelCodegen(CGF, Action, S);
   };
@@ -4437,6 +4440,7 @@ void CodeGenFunction::EmitOMPTargetParallelDirective(
 
 static void TargetSimdCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
                               const OMPTargetSimdDirective &S) {
+    llvm::errs() << "Stm::TargetSimdCodegen\n";
   CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
   (void)CGF.EmitOMPFirstprivateClause(S, PrivateScope);
   CGF.EmitOMPPrivateClause(S, PrivateScope);
@@ -4448,6 +4452,7 @@ static void TargetSimdCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
 
 void CodeGenFunction::EmitOMPTargetSimdDirective(
     const OMPTargetSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetSimdDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetSimdCodegen(CGF, Action, S);
   };
@@ -4467,6 +4472,7 @@ void CodeGenFunction::EmitOMPTargetSimdDirective(
 
 void CodeGenFunction::EmitOMPTargetSimdDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName, const OMPTargetSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetSimdDeviceFunction\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetSimdCodegen(CGF, Action, S);
   };
@@ -4482,6 +4488,7 @@ void CodeGenFunction::EmitOMPTargetSimdDeviceFunction(
 static void TargetParallelForCodegen(CodeGenFunction &CGF,
                                      PrePostActionTy &Action,
                                      const OMPTargetParallelForDirective &S) {
+    llvm::errs() << "Stm::TargetParallelForCodegen\n";
   Action.Enter(CGF);
   // Emit directive as a combined directive that consists of two implicit
   // directives: 'parallel' with 'for' directive.
@@ -4495,6 +4502,7 @@ static void TargetParallelForCodegen(CodeGenFunction &CGF,
 void CodeGenFunction::EmitOMPTargetParallelForDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetParallelForDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetParallelForDeviceFunction\n";
   // Emit SPMD target parallel for region as a standalone region.
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetParallelForCodegen(CGF, Action, S);
@@ -4510,6 +4518,7 @@ void CodeGenFunction::EmitOMPTargetParallelForDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetParallelForDirective(
     const OMPTargetParallelForDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetParallelForDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetParallelForCodegen(CGF, Action, S);
   };
@@ -4530,6 +4539,7 @@ void CodeGenFunction::EmitOMPTargetParallelForDirective(
 static void
 TargetParallelForSimdCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
                              const OMPTargetParallelForSimdDirective &S) {
+    llvm::errs() << "Stm::TargetParallelForSimdCodegen\n";
   Action.Enter(CGF);
   // Emit directive as a combined directive that consists of two implicit
   // directives: 'parallel' with 'for' directive.
@@ -4543,6 +4553,7 @@ TargetParallelForSimdCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
 void CodeGenFunction::EmitOMPTargetParallelForSimdDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetParallelForSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetParallelForSimdDeviceFunction\n";
   // Emit SPMD target parallel for region as a standalone region.
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetParallelForSimdCodegen(CGF, Action, S);
@@ -4558,6 +4569,7 @@ void CodeGenFunction::EmitOMPTargetParallelForSimdDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetParallelForSimdDirective(
     const OMPTargetParallelForSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetParallelForSimdDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetParallelForSimdCodegen(CGF, Action, S);
   };
@@ -4578,6 +4590,7 @@ void CodeGenFunction::EmitOMPTargetParallelForSimdDirective(
 static void TargetTeamsDistributeParallelForCodegen(
     CodeGenModule &CGM, CodeGenFunction &CGF, PrePostActionTy &Action,
     const OMPTargetTeamsDistributeParallelForDirective &S) {
+    llvm::errs() << "Stm::TargetTeamsDistributeParallelForCodegen\n";
   Action.Enter(CGF);
   auto &&CodeGen = [&CGM, &S](CodeGenFunction &CGF, PrePostActionTy &) {
     CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
@@ -4606,6 +4619,7 @@ static void TargetTeamsDistributeParallelForCodegen(
 void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetTeamsDistributeParallelForDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeParallelForDeviceFunction\n";
   // Emit SPMD target parallel for region as a standalone region.
   auto &&CodeGen = [&S, &CGM](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeParallelForCodegen(CGM, CGF, Action, S);
@@ -4621,6 +4635,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForDirective(
     const OMPTargetTeamsDistributeParallelForDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeParallelForDirective\n";
   auto &&CodeGen = [&S, this](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeParallelForCodegen(CGM, CGF, Action, S);
   };
@@ -4642,6 +4657,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForDirective(
 static void TargetTeamsDistributeParallelForSimdCodegen(
     CodeGenModule &CGM, CodeGenFunction &CGF, PrePostActionTy &Action,
     const OMPTargetTeamsDistributeParallelForSimdDirective &S) {
+    llvm::errs() << "Stm::TargetTeamsDistributeParallelForSimdCodegen\n";
   Action.Enter(CGF);
   auto &&CodeGen = [&CGM, &S](CodeGenFunction &CGF, PrePostActionTy &) {
     CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
@@ -4671,6 +4687,7 @@ static void TargetTeamsDistributeParallelForSimdCodegen(
 void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForSimdDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetTeamsDistributeParallelForSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeParallelForSimdDeviceFunction\n";
   // Emit SPMD target parallel for region as a standalone region.
   auto &&CodeGen = [&S, &CGM](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeParallelForSimdCodegen(CGM, CGF, Action, S);
@@ -4686,6 +4703,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForSimdDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForSimdDirective(
     const OMPTargetTeamsDistributeParallelForSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeParallelForSimdDirective\n";
   auto &&CodeGen = [&S, this](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeParallelForSimdCodegen(CGM, CGF, Action, S);
   };
@@ -4705,6 +4723,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDistributeParallelForSimdDirective(
 }
 
 void CodeGenFunction::EmitOMPTeamsDirective(const OMPTeamsDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTeamsDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     OMPPrivateScope PrivateScope(CGF);
     (void)CGF.EmitOMPFirstprivateClause(S, PrivateScope);
@@ -4722,6 +4741,7 @@ void CodeGenFunction::EmitOMPTeamsDirective(const OMPTeamsDirective &S) {
 
 static void TargetTeamsCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
                                const OMPTargetTeamsDirective &S) {
+    llvm::errs() << "Stm::TargetTeamsCodegen\n";
   Action.Enter(CGF);
   auto &&TeamsBodyCG = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
@@ -4744,6 +4764,7 @@ static void TargetTeamsCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
 void CodeGenFunction::EmitOMPTargetTeamsDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetTeamsDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDeviceFunction\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsCodegen(CGF, Action, S);
   };
@@ -4758,6 +4779,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetTeamsDirective(
     const OMPTargetTeamsDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsCodegen(CGF, Action, S);
   };
@@ -4778,6 +4800,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDirective(
 static void
 TargetTeamsDistributeCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
                              const OMPTargetTeamsDistributeDirective &S) {
+    llvm::errs() << "Stm::TargetTeamsDistributeCodegen\n";
   Action.Enter(CGF);
   auto &&CGDistributeInlined = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
@@ -4802,6 +4825,7 @@ TargetTeamsDistributeCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,
 void CodeGenFunction::EmitOMPTargetTeamsDistributeDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetTeamsDistributeDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeDeviceFunction\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeCodegen(CGF, Action, S);
   };
@@ -4816,6 +4840,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDistributeDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetTeamsDistributeDirective(
     const OMPTargetTeamsDistributeDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeCodegen(CGF, Action, S);
   };
@@ -4836,6 +4861,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDistributeDirective(
 static void TargetTeamsDistributeSimdCodegen(
     CodeGenFunction &CGF, PrePostActionTy &Action,
     const OMPTargetTeamsDistributeSimdDirective &S) {
+    llvm::errs() << "Stm::TargetTeamsDistributeSimdCodegen\n";
   Action.Enter(CGF);
   auto &&CGDistributeInlined = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     CodeGenFunction::OMPPrivateScope PrivateScope(CGF);
@@ -4863,6 +4889,7 @@ static void TargetTeamsDistributeSimdCodegen(
 void CodeGenFunction::EmitOMPTargetTeamsDistributeSimdDeviceFunction(
     CodeGenModule &CGM, StringRef ParentName,
     const OMPTargetTeamsDistributeSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeSimdDeviceFunction\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeSimdCodegen(CGF, Action, S);
   };
@@ -4877,6 +4904,7 @@ void CodeGenFunction::EmitOMPTargetTeamsDistributeSimdDeviceFunction(
 
 void CodeGenFunction::EmitOMPTargetTeamsDistributeSimdDirective(
     const OMPTargetTeamsDistributeSimdDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetTeamsDistributeSimdDirective\n";
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &Action) {
     TargetTeamsDistributeSimdCodegen(CGF, Action, S);
   };
@@ -4990,6 +5018,7 @@ void CodeGenFunction::EmitOMPUseDevicePtrClause(
 // Generate the instructions for '#pragma omp target data' directive.
 void CodeGenFunction::EmitOMPTargetDataDirective(
     const OMPTargetDataDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetDataDirective\n";
   CGOpenMPRuntime::TargetDataInfo Info(/*RequiresDevicePointerInfo=*/true);
 
   // Create a pre/post action to signal the privatization of the device pointer.
@@ -5079,6 +5108,7 @@ void CodeGenFunction::EmitOMPTargetDataDirective(
 
 void CodeGenFunction::EmitOMPTargetEnterDataDirective(
     const OMPTargetEnterDataDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetEnterDataDirective\n";
   // If we don't have target devices, don't bother emitting the data mapping
   // code.
   if (CGM.getLangOpts().OMPTargetTriples.empty())
@@ -5099,6 +5129,7 @@ void CodeGenFunction::EmitOMPTargetEnterDataDirective(
 
 void CodeGenFunction::EmitOMPTargetExitDataDirective(
     const OMPTargetExitDataDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetExitDataDirective\n";
   // If we don't have target devices, don't bother emitting the data mapping
   // code.
   if (CGM.getLangOpts().OMPTargetTriples.empty())
@@ -5278,6 +5309,7 @@ void CodeGenFunction::EmitOMPTaskLoopSimdDirective(
 // Generate the instructions for '#pragma omp target update' directive.
 void CodeGenFunction::EmitOMPTargetUpdateDirective(
     const OMPTargetUpdateDirective &S) {
+    llvm::errs() << "Stm::EmitOMPTargetUpdateDirective\n";
   // If we don't have target devices, don't bother emitting the data mapping
   // code.
   if (CGM.getLangOpts().OMPTargetTriples.empty())
