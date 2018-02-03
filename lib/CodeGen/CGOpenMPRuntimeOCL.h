@@ -1,4 +1,4 @@
-//===----- CGOpenMPRuntimeSPIR.h - Interface to OpenMP SPIR Runtimes ----===//
+//===----- CGOpenMPRuntimeOCL.h - Interface to OpenCL/SPIR Runtimes ----===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -73,6 +73,60 @@ protected:
                                   uint64_t Size, uint64_t Flags = 0u);
 
 public:
+  // \brief Group the captures information for a given context.
+  struct DataSharingInfo {
+    enum DataSharingType {
+      // A value allocated in the current function - the alloca has to be
+      // replaced by the address in shared memory.
+      DST_Val,
+      // A reference captured into this function - the reference has to be
+      // shared as is.
+      DST_Ref,
+      // A value allocated in the current function but required a cast in the
+      // header - it has to be replaced by the address in shared memory and the
+      // pointee has to be copied there.
+      DST_Cast,
+    };
+    // The local values of the captures. The boolean indicates that what is
+    // being shared is a reference and not the variable original storage.
+    llvm::SmallVector<std::pair<const VarDecl *, DataSharingType>, 8>
+        CapturesValues;
+    llvm::SmallVector<std::pair<const Expr*, const VarDecl *>, 8>
+        VLADeclMap;
+
+    void add(const VarDecl *VD, DataSharingType DST) {
+      CapturesValues.push_back(std::make_pair(VD, DST));
+    }
+
+    void addVLADecl(const Expr* VATExpr, const VarDecl *VD) {
+      // VLADeclMap[VATExpr] = VD;
+      VLADeclMap.push_back(std::make_pair(VATExpr, VD));
+    }
+
+    const VarDecl *getVLADecl(const Expr* VATExpr) const {
+      for (auto ExprDeclPair : VLADeclMap) {
+        if (ExprDeclPair.first == VATExpr) {
+          return ExprDeclPair.second;
+        }
+      }
+      assert(false && "No VAT expression that matches the input");
+      return nullptr;
+    }
+
+    bool isVLADecl(const VarDecl* VD) const {
+      for (auto ExprDeclPair : VLADeclMap) {
+        if (ExprDeclPair.second == VD) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // The record type of the sharing region if shared by the master.
+    QualType MasterRecordType;
+  };
+
+
   explicit CGOpenMPRuntimeOCL(CodeGenModule &CGM);
 
   /// \brief Emit outlined function for 'target' directive on the opencl/spir
@@ -281,6 +335,12 @@ public:
                                     const RegionCodeGenTy &CodeGen,
                                     bool HasCancel = false);
 
+  /// \brief Registers the context of a parallel region with the runtime
+  /// codegen implementation.
+  void registerParallelContext(CodeGenFunction &CGF,
+                               const OMPExecutableDirective &S) override;
+
+
   /// \brief Emit code for the loop-based directives for opencl/spir target.
   virtual void EmitOMPLoopAsCLKernel(CodeGenFunction &CGF,
                                      const OMPLoopDirective &S);
@@ -290,6 +350,59 @@ public:
                                           const OMPLoopDirective &S);
 
 private:
+  // \brief Map between a context and its data sharing information.
+  typedef llvm::DenseMap<const Decl *, DataSharingInfo> DataSharingInfoMapTy;
+  DataSharingInfoMapTy DataSharingInfoMap;
+
+  // \brief Obtain the data sharing info for the current context.
+  const DataSharingInfo &getDataSharingInfo(const Decl *Context);
+
+  // \brief Create the data sharing info for the current context.
+  void createDataSharingInfo(CodeGenFunction &CGF);
+
+  // \brief Set of all functions that are offload entry points.
+  llvm::SmallPtrSet<llvm::Function *, 16> EntryPointFunctionSet;
+
+  // \brief Map between a function and its associated data sharing related
+  // values.
+  struct DataSharingFunctionInfo {
+    bool RequiresOMPRuntime;
+    bool IsEntryPoint;
+    llvm::Function *EntryWorkerFunction;
+    llvm::BasicBlock *EntryExitBlock;
+    llvm::BasicBlock *InitDSBlock;
+    llvm::Function *InitializationFunction;
+    SmallVector<std::pair<llvm::Value *, bool>, 16> ValuesToBeReplaced;
+    DataSharingFunctionInfo()
+        : RequiresOMPRuntime(true), IsEntryPoint(false),
+          EntryWorkerFunction(nullptr), EntryExitBlock(nullptr),
+          InitDSBlock(nullptr), InitializationFunction(nullptr) {}
+  };
+  typedef llvm::DenseMap<llvm::Function *, DataSharingFunctionInfo>
+      DataSharingFunctionInfoMapTy;
+  DataSharingFunctionInfoMapTy DataSharingFunctionInfoMap;
+
+  // \brief Create the data sharing replacement pairs at the top of a function
+  // with parallel regions. If they were created already, do not do anything.
+  void
+  createDataSharingPerFunctionInfrastructure(CodeGenFunction &EnclosingCGF);
+
+  // \brief Create the data sharing arguments and call the parallel outlined
+  // function.
+  llvm::Function *createDataSharingParallelWrapper(
+      llvm::Function &OutlinedParallelFn, const OMPExecutableDirective &D,
+      const Decl *CurrentContext, bool IsSimd = false);
+
+  // \brief Map between an outlined function and its data-sharing-wrap version.
+  llvm::DenseMap<llvm::Function *, llvm::Function *> WrapperFunctionsMap;
+
+  // \brief Context that is being currently used for purposes of parallel region
+  // code generarion.
+  const Decl *CurrentParallelContext = nullptr;
+
+
+
+
   unsigned GetNumNestedLoops(const OMPExecutableDirective &S);
 
   llvm::Value *EmitHostParameters(ForStmt *FS, llvm::raw_fd_ostream &FOS,

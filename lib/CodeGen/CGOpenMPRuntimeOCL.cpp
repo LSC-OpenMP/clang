@@ -119,10 +119,39 @@ void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt *S) {
   /* CGF.EHStack.popTerminate(); */
 }
 
+/// Run the provided function with the shared loop bounds of a loop directive.
+static void DoOnSharedLoopBounds(
+    const OMPExecutableDirective &D,
+    const llvm::function_ref<void(const VarDecl *, const VarDecl *)> &Exec) {
+  // Is this a loop directive?
+  if (isOpenMPLoopBoundSharingDirective(D.getDirectiveKind())) {
+    auto *LDir = dyn_cast<OMPLoopDirective>(&D);
+    // Do the bounds of the associated loop need to be shared? This check is the
+    // same as checking the existence of an expression that refers to a previous
+    // (enclosing) loop.
+    if (LDir->getPrevLowerBoundVariable()) {
+      const VarDecl *LB = cast<VarDecl>(
+          cast<DeclRefExpr>(LDir->getLowerBoundVariable())->getDecl());
+      const VarDecl *UB = cast<VarDecl>(
+          cast<DeclRefExpr>(LDir->getUpperBoundVariable())->getDecl());
+      Exec(LB, UB);
+    }
+  }
+}
 
 //
 // Some assets used by OpenMPRuntimeOCL
 //
+
+enum DATA_SHARING_SIZES {
+  // The maximum number of threads per block.
+  DS_Max_Worker_Threads = 1024,
+  // The max number of dimmensions
+  DS_Slots = 3,
+  // The maximum number of blocks.
+  DS_Max_Blocks = 32
+};
+
 std::vector<std::pair<int, std::string>> vectorNames[8];
 std::vector<std::pair<int, std::string>> scalarNames[8];
 
@@ -823,8 +852,238 @@ void CGOpenMPRuntimeOCL::createOffloadEntry(llvm::Constant *ID,
                                             llvm::Constant *Addr, uint64_t Size,
                                             uint64_t Flags) {
 
-  llvm::errs() << "eOCL::createOffloadEntry\n";
+  llvm::errs() << "OCL::createOffloadEntry\n";
 }
+
+static FieldDecl *addFieldToRecordDecl(ASTContext &C, DeclContext *DC,
+                                       QualType FieldTy) {
+  auto *Field = FieldDecl::Create(
+      C, DC, SourceLocation(), SourceLocation(), /*Id=*/nullptr, FieldTy,
+      C.getTrivialTypeSourceInfo(FieldTy, SourceLocation()),
+      /*BW=*/nullptr, /*Mutable=*/false, /*InitStyle=*/ICIS_NoInit);
+  Field->setAccess(AS_public);
+  DC->addDecl(Field);
+  return Field;
+}
+
+
+/// \brief Registers the context of a parallel region with the runtime
+/// codegen implementation.
+void CGOpenMPRuntimeOCL::registerParallelContext(
+    CodeGenFunction &CGF, const OMPExecutableDirective &S) {
+  CurrentParallelContext = CGF.CurCodeDecl;
+
+  if (isOpenMPParallelDirective(S.getDirectiveKind()) ||
+      isOpenMPSimdDirective(S.getDirectiveKind()))
+    createDataSharingInfo(CGF);
+}
+
+void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
+    llvm::errs() << "OCL::createDataSharingInfo\n";
+  auto &Context = CGF.CurCodeDecl;
+  assert(Context &&
+         "A parallel region is expected to be enclosed in a context.");
+
+  ASTContext &C = CGM.getContext();
+
+  if (DataSharingInfoMap.find(Context) != DataSharingInfoMap.end())
+    return;
+
+  auto &Info = DataSharingInfoMap[Context];
+
+  // Get the body of the region. The region context is either a function or a
+  // captured declaration.
+  const Stmt *Body;
+  if (auto *D = dyn_cast<CapturedDecl>(Context))
+    Body = D->getBody();
+  else
+    Body = cast<FunctionDecl>(Context)->getBody();
+
+  /* Body->printPretty(llvm::errs(), nullptr, PrintingPolicy(CGF.getContext().getLangOpts()), 4); */
+
+  // Track if in this region one has to share
+
+  // Find all the captures in all enclosed regions and obtain their captured
+  // statements.
+  SmallVector<const OMPExecutableDirective *, 8> CapturedDirs;
+  SmallVector<const Stmt *, 64> WorkList;
+  WorkList.push_back(Body);
+  while (!WorkList.empty()) {
+    const Stmt *CurStmt = WorkList.pop_back_val();
+    if (!CurStmt)
+      continue;
+
+    // Is this a parallel region.
+    if (auto *Dir = dyn_cast<OMPExecutableDirective>(CurStmt)) {
+      if (isOpenMPParallelDirective(Dir->getDirectiveKind()) ||
+          isOpenMPSimdDirective(Dir->getDirectiveKind())) {
+        CapturedDirs.push_back(Dir);
+      } else {
+        if (Dir->hasAssociatedStmt()) {
+          // Look into the associated statement of OpenMP directives.
+          const CapturedStmt &CS =
+              *cast<CapturedStmt>(Dir->getAssociatedStmt());
+          CurStmt = CS.getCapturedStmt();
+
+          WorkList.push_back(CurStmt);
+        }
+      }
+
+      continue;
+    }
+
+    // Keep looking for other regions.
+    WorkList.append(CurStmt->child_begin(), CurStmt->child_end());
+  }
+
+  assert(!CapturedDirs.empty() && "Expecting at least one parallel region!");
+
+  // Scan the captured statements and generate a record to contain all the data
+  // to be shared. Make sure we do not share the same thing twice.
+  auto *SharedMasterRD =
+      C.buildImplicitRecord("__openmp_spir_data_sharing_master_record");
+  auto *SharedThreadRD =
+      C.buildImplicitRecord("__openmp_spir_data_sharing_thread_record");
+  SharedMasterRD->startDefinition();
+  SharedThreadRD->startDefinition();
+
+  llvm::SmallSet<const VarDecl *, 32> AlreadySharedDecls;
+  ASTContext &Ctx = CGF.getContext();
+  for (auto *Dir : CapturedDirs) {
+    const auto *CS = cast<CapturedStmt>(Dir->getAssociatedStmt());
+    if (Dir->hasClausesOfKind<OMPDependClause>() &&
+        isOpenMPTargetExecutionDirective(Dir->getDirectiveKind()))
+      CS = cast<CapturedStmt>(CS->getCapturedStmt());
+    const RecordDecl *RD = CS->getCapturedRecordDecl();
+    auto CurField = RD->field_begin();
+    auto CurCap = CS->capture_begin();
+    int idx = 0;
+    for (CapturedStmt::const_capture_init_iterator I = CS->capture_init_begin(),
+                                                   E = CS->capture_init_end();
+         I != E; ++I, ++CurField, ++CurCap) {
+
+      const VarDecl *CurVD = nullptr;
+      QualType ElemTy;
+      if (*I)
+        ElemTy = (*I)->getType();
+
+      // Track the data sharing type.
+      DataSharingInfo::DataSharingType DST = DataSharingInfo::DST_Val;
+
+      if (CurCap->capturesThis()) {
+        // We use null to indicate 'this'.
+        CurVD = nullptr;
+      } else {
+        // Get the variable that is initializing the capture.
+        if (CurField->hasCapturedVLAType()) {
+          auto VAT = CurField->getCapturedVLAType();
+          ElemTy = Ctx.getSizeType();
+          CurVD = ImplicitParamDecl::Create(Ctx, ElemTy,
+              ImplicitParamDecl::Other);
+          CGF.EmitVarDecl(*CurVD);
+          CGF.Builder.CreateAlignedStore(CGF.Builder.CreateIntCast(
+              CGF.VLASizeMap[VAT->getSizeExpr()], CGM.SizeTy, false),
+              CGF.GetAddrOfLocalVar(CurVD).getPointer(),
+              CGF.getPointerAlign());
+          Info.addVLADecl(VAT->getSizeExpr(), CurVD);
+        } else
+          CurVD = CurCap->getCapturedVar();
+
+        // If this is an OpenMP capture declaration, we need to look at the
+        // original declaration.
+        const VarDecl *OrigVD = CurVD;
+        if (auto *OD = dyn_cast<OMPCapturedExprDecl>(OrigVD))
+          OrigVD = cast<VarDecl>(
+              cast<DeclRefExpr>(OD->getInit()->IgnoreImpCasts())->getDecl());
+
+        idx++;
+        llvm::errs() << "Function arg(" << idx << "):";
+        cast<Decl>(OrigVD)->dumpColor();
+
+        // If the variable does not have local storage it is always a reference.
+        if (!OrigVD->hasLocalStorage())
+          DST = DataSharingInfo::DST_Ref;
+        else {
+          // If we have an alloca for this variable, then we need to share the
+          // storage too, not only the reference.
+          auto *Val = cast<llvm::Instruction>(
+              CGF.GetAddrOfLocalVar(OrigVD).getPointer());
+          if (isa<llvm::LoadInst>(Val))
+            DST = DataSharingInfo::DST_Ref;
+          // If the variable is a bitcast, it is being encoded in a pointer
+          // and should be treated as such.
+          else if (isa<llvm::BitCastInst>(Val))
+            DST = DataSharingInfo::DST_Cast;
+          // If the variable is a reference, we also share it as is,
+          // i.e., consider it a reference to something that can be shared.
+          else if (OrigVD->getType()->isReferenceType())
+            DST = DataSharingInfo::DST_Ref;
+        }
+      }
+
+      // Do not insert the same declaration twice.
+      if (AlreadySharedDecls.count(CurVD))
+        continue;
+
+      AlreadySharedDecls.insert(CurVD);
+      Info.add(CurVD, DST);
+
+      if (DST == DataSharingInfo::DST_Ref)
+        ElemTy = C.getPointerType(ElemTy);
+
+      addFieldToRecordDecl(C, SharedMasterRD, ElemTy);
+      llvm::APInt NumElems(C.getTypeSize(C.getUIntPtrType()),
+                           DS_Max_Blocks);
+      auto QTy = C.getConstantArrayType(ElemTy, NumElems, ArrayType::Normal,
+                                        /*IndexTypeQuals=*/0);
+      addFieldToRecordDecl(C, SharedThreadRD, QTy);
+    }
+
+    // Add loop bounds if required.
+     DoOnSharedLoopBounds(*Dir, [&AlreadySharedDecls, &C, &Info, &SharedMasterRD,
+                                &SharedThreadRD, &Dir,
+                                &CGF](const VarDecl *LB, const VarDecl *UB) {
+      // Do not insert the same declaration twice.
+      if (AlreadySharedDecls.count(LB))
+        return;
+
+      // We assume that if the lower bound is not to be shared, the upper
+      // bound is not shared as well.
+      assert(!AlreadySharedDecls.count(UB) &&
+             "Not expecting shared upper bound.");
+
+      QualType ElemTy = LB->getType();
+
+      // Bounds are shared by value.
+      Info.add(LB, DataSharingInfo::DST_Val);
+      Info.add(UB, DataSharingInfo::DST_Val);
+      addFieldToRecordDecl(C, SharedMasterRD, ElemTy);
+      addFieldToRecordDecl(C, SharedMasterRD, ElemTy);
+
+      llvm::APInt NumElems(C.getTypeSize(C.getUIntPtrType()),
+                           DS_Max_Blocks);
+      auto QTy = C.getConstantArrayType(ElemTy, NumElems, ArrayType::Normal,
+                                        /*IndexTypeQuals=*/0);
+      addFieldToRecordDecl(C, SharedThreadRD, QTy);
+      addFieldToRecordDecl(C, SharedThreadRD, QTy);
+
+      // Emit the preinits to make sure the initializers are properly
+      // emitted.
+      // FIXME: This is a hack - it won't work if declarations being shared
+      // appear after the first parallel region.
+      const OMPLoopDirective *L = cast<OMPLoopDirective>(Dir);
+      if (auto *PreInits = cast_or_null<DeclStmt>(L->getPreInits()))
+        for (const auto *I : PreInits->decls()) {
+          CGF.EmitOMPHelperVar(cast<VarDecl>(I));
+        }
+    });
+ }
+
+  SharedMasterRD->completeDefinition();
+  Info.MasterRecordType = C.getRecordType(SharedMasterRD);
+  return;
+}
+
 
 void CGOpenMPRuntimeOCL::EmitOMPLoopAsCLKernel(CodeGenFunction &CGF,
                                                const OMPLoopDirective &S) {
