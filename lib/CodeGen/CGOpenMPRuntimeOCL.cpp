@@ -899,10 +899,7 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
   else
     Body = cast<FunctionDecl>(Context)->getBody();
 
-  /* Body->printPretty(llvm::errs(), nullptr, PrintingPolicy(CGF.getContext().getLangOpts()), 4); */
-
   // Track if in this region one has to share
-
   // Find all the captures in all enclosed regions and obtain their captured
   // statements.
   SmallVector<const OMPExecutableDirective *, 8> CapturedDirs;
