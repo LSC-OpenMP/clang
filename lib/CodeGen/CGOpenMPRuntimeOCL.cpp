@@ -32,6 +32,7 @@ namespace {
 
 /// \brief Base class for handling code generation inside OpenMP regions.
 class CGOpenMPRegionInfo : public CodeGenFunction::CGCapturedStmtInfo {
+
 public:
   /// \brief Kinds of OpenMP regions used in codegen.
   enum CGOpenMPRegionKind {
@@ -79,10 +80,22 @@ public:
   ~CGOpenMPRegionInfo() override = default;
 
 protected:
+
+  std::string KernelName;
   CGOpenMPRegionKind RegionKind;
   RegionCodeGenTy CodeGen;
   OpenMPDirectiveKind Kind;
   bool HasCancel;
+
+  int createTempFile() {
+    char *tmpName = strdup("kernel_XXXXXX");
+    int fd = mkstemp(tmpName);
+    KernelName = std::string(tmpName);
+    return fd;
+  }
+
+  std::string getTempName() { return KernelName; }
+
 };
 
 class CGOpenMPOutlinedRegionInfo final : public CGOpenMPRegionInfo {
@@ -109,13 +122,34 @@ private:
 };
 
 void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt *S) {
-    llvm::errs() << "OCL::EmitBody for\n";
+  llvm::errs() << "OCL::EmitBody for\n";
   if (!CGF.HaveInsertPoint())
     return;
   /* CGF.EHStack.pushTerminate(); */
-  /* CodeGen(CGF); */
-  /* TODO: Insert call to isl & generate code for dispatch kernel. */
-  S->printPretty(llvm::errs(), nullptr, PrintingPolicy(CGF.getContext().getLangOpts()), 4);
+
+  llvm::raw_fd_ostream CLOS(CGOpenMPRegionInfo::createTempFile(), true);
+  const std::string FileName = CGOpenMPRegionInfo::getTempName();
+
+  CodeGenModule &CGM = CGF.CGM;
+  std::string includeContents = CGM.OpenMPSupport.getIncludeStr();
+
+  if (includeContents != "") {
+    CLOS << includeContents << "\n";
+  }
+
+  S->printPretty(CLOS, nullptr, PrintingPolicy(CGF.getContext().getLangOpts()), 4);
+  CLOS.close();
+
+  /* Insert call to pcg: polyhedral code generation */
+  /* std::string pcg = "clang-pcg " + FileName; */
+  /* std::system(pcg.c_str()); */
+  /* std::ifstream argFile(FileName); */
+  /* if (argFile.is_open()) { */
+  /*   /1* CodeGen(CGF); *1/ */
+  /*   argFile.close(); */
+  /* } */
+  /* std::remove(FileName.c_str()); */
+
   /* CGF.EHStack.popTerminate(); */
 }
 
@@ -138,6 +172,8 @@ static void DoOnSharedLoopBounds(
     }
   }
 }
+
+} // namespace
 
 //
 // Some assets used by OpenMPRuntimeOCL
@@ -204,8 +240,6 @@ int GetTypeSizeInBits(llvm::Type *ty) {
   }
   return typeSize;
 }
-
-} // namespace
 
 ///
 /// Get the Variable Name inside the Value argument
@@ -954,7 +988,12 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
     const RecordDecl *RD = CS->getCapturedRecordDecl();
     auto CurField = RD->field_begin();
     auto CurCap = CS->capture_begin();
+
     int idx = 0;
+    // start storing shared data into a string to be used by OpenCl kernel
+    std::string incStr;
+    llvm::raw_string_ostream Inc(incStr);
+
     for (CapturedStmt::const_capture_init_iterator I = CS->capture_init_begin(),
                                                    E = CS->capture_init_end();
          I != E; ++I, ++CurField, ++CurCap) {
@@ -994,8 +1033,14 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
               cast<DeclRefExpr>(OD->getInit()->IgnoreImpCasts())->getDecl());
 
         idx++;
+        Inc << idx << ": ";
+        cast<Decl>(OrigVD)->print(Inc);
+        Inc << "\n";
+
+        // Debug
         llvm::errs() << "Function arg(" << idx << "):";
-        cast<Decl>(OrigVD)->dumpColor();
+        cast<Decl>(OrigVD)->print(llvm::errs()); llvm::errs() << "\n";
+        // end Debug
 
         // If the variable does not have local storage it is always a reference.
         if (!OrigVD->hasLocalStorage())
@@ -1036,6 +1081,8 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
       addFieldToRecordDecl(C, SharedThreadRD, QTy);
     }
 
+    CGF.CGM.OpenMPSupport.appendIncludeStr(Inc.str());
+
     // Add loop bounds if required.
      DoOnSharedLoopBounds(*Dir, [&AlreadySharedDecls, &C, &Info, &SharedMasterRD,
                                 &SharedThreadRD, &Dir,
@@ -1064,8 +1111,7 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
       addFieldToRecordDecl(C, SharedThreadRD, QTy);
       addFieldToRecordDecl(C, SharedThreadRD, QTy);
 
-      // Emit the preinits to make sure the initializers are properly
-      // emitted.
+      // Emit the preinits to make sure the initializers are properly emitted.
       // FIXME: This is a hack - it won't work if declarations being shared
       // appear after the first parallel region.
       const OMPLoopDirective *L = cast<OMPLoopDirective>(Dir);
