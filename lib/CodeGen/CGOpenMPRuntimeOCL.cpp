@@ -81,20 +81,10 @@ public:
 
 protected:
 
-  std::string KernelName;
   CGOpenMPRegionKind RegionKind;
   RegionCodeGenTy CodeGen;
   OpenMPDirectiveKind Kind;
   bool HasCancel;
-
-  int createTempFile() {
-    char *tmpName = strdup("kernel_XXXXXX");
-    int fd = mkstemp(tmpName);
-    KernelName = std::string(tmpName);
-    return fd;
-  }
-
-  std::string getTempName() { return KernelName; }
 
 };
 
@@ -122,33 +112,30 @@ private:
 };
 
 void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt *S) {
-  llvm::errs() << "OCL::EmitBody for\n";
+  llvm::errs() << "OCL::EmitBody\n";
   if (!CGF.HaveInsertPoint())
     return;
   /* CGF.EHStack.pushTerminate(); */
 
-  llvm::raw_fd_ostream CLOS(CGOpenMPRegionInfo::createTempFile(), true);
-  const std::string FileName = CGOpenMPRegionInfo::getTempName();
-
   CodeGenModule &CGM = CGF.CGM;
+  llvm::raw_fd_ostream CLOS(CGM.OpenMPSupport.createTempFile(), true);
+  const std::string FileName = CGM.OpenMPSupport.getTempName();
   std::string includeContents = CGM.OpenMPSupport.getIncludeStr();
+  std::string argsStr = CGM.OpenMPSupport.getArgsStr();
 
   if (includeContents != "") {
-    CLOS << includeContents << "\n";
+      // There are OpenMP Declare statements
+      CLOS << includeContents << "\n";
   }
 
+  // Dump the args and the loop body for clang-pcg
+  CLOS << argsStr << "\n#Body:\n";
   S->printPretty(CLOS, nullptr, PrintingPolicy(CGF.getContext().getLangOpts()), 4);
   CLOS.close();
 
-  /* Insert call to pcg: polyhedral code generation */
-  /* std::string pcg = "clang-pcg " + FileName; */
-  /* std::system(pcg.c_str()); */
-  /* std::ifstream argFile(FileName); */
-  /* if (argFile.is_open()) { */
-  /*   /1* CodeGen(CGF); *1/ */
-  /*   argFile.close(); */
-  /* } */
-  /* std::remove(FileName.c_str()); */
+  // Insert call to clang-pcg, the polyhedral code generation module
+  std::string pcg = "clang-pcg " + FileName;
+  std::system(pcg.c_str());
 
   /* CGF.EHStack.popTerminate(); */
 }
@@ -542,8 +529,129 @@ void CGOpenMPRuntimeOCL::GenOpenCLArgMetadata(const RecordDecl *FD,
 }
 
 llvm::Constant *
-CGOpenMPRuntimeOCL::createRuntimeFunction(OpenMPRTLFunctionSPIR Function) {
-  // llvm::errs() << "CGOpenMPRuntimeOCL::createRuntimeFunction\n";
+CGOpenMPRuntimeOCL::createRuntimeFunction(OpenMPRTLKernelFunction Function) {
+
+  llvm::outs() << "CGOpenMPRuntimeOCL::createRuntimeFunction\n";
+
+  llvm::Constant *RTLFn = nullptr;
+  switch (Function) {
+      case _cl_create_read_only: {
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, CGM.Int64Ty, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_create_read_only");
+        break;
+      }
+      case _cl_create_write_only: {
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, CGM.Int64Ty, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_create_write_only");
+        break;
+      }
+      case _cl_offloading_read_only: {
+        llvm::Type *TParams[] = {CGM.Int64Ty, CGM.VoidPtrTy};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_offloading_read_only");
+        break;
+      }
+      case _cl_offloading_write_only: {
+        llvm::Type *TParams[] = {CGM.Int64Ty, CGM.VoidPtrTy};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_offloading_write_only");
+        break;
+      }
+      case _cl_create_read_write: {
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, CGM.Int64Ty, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_create_read_write");
+        break;
+      }
+      case _cl_offloading_read_write: {
+        llvm::Type *TParams[] = {CGM.Int64Ty, CGM.VoidPtrTy};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_offloading_read_write");
+        break;
+      }
+      case _cl_read_buffer: {
+        llvm::Type *TParams[] = {CGM.Int64Ty, CGM.Int32Ty, CGM.VoidPtrTy};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_read_buffer");
+        break;
+      }
+      case _cl_write_buffer: {
+        llvm::Type *TParams[] = {CGM.Int64Ty, CGM.Int32Ty, CGM.VoidPtrTy};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_write_buffer");
+        break;
+      }
+      case _cl_create_program: {
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, CGM.Int8PtrTy, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_create_program");
+        break;
+      }
+      case _cl_create_kernel: {
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, CGM.Int8PtrTy, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_create_kernel");
+        break;
+      }
+      case _cl_set_kernel_args: {
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, CGM.Int32Ty, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_set_kernel_args");
+        break;
+      }
+      case _cl_set_kernel_arg: {
+        llvm::Type *TParams[] = {CGM.Int32Ty, CGM.Int32Ty};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_set_kernel_arg");
+        break;
+      }
+      case _cl_set_kernel_hostArg: {
+        llvm::Type *TParams[] = {CGM.Int32Ty, CGM.Int32Ty, CGM.VoidPtrTy};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_set_kernel_hostArg");
+        break;
+      }
+      case _cl_execute_kernel: {
+        llvm::Type *TParams[] = {CGM.Int64Ty, CGM.Int64Ty, CGM.Int64Ty,
+                                 CGM.Int32Ty};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_execute_kernel");
+        break;
+      }
+      case _cl_execute_tiled_kernel: {
+        llvm::Type *TParams[] = {CGM.Int32Ty, CGM.Int32Ty, CGM.Int32Ty, CGM.Int32Ty,
+                                 CGM.Int32Ty, CGM.Int32Ty, CGM.Int32Ty};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_execute_tiled_kernel");
+        break;
+      }
+      case _cl_release_buffer: {
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.VoidTy, CGM.Int32Ty, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_set_release_buffer");
+        break;
+      }
+      case _cl_get_threads_blocks: {
+        llvm::Type *TParams[] = {CGM.IntPtrTy, CGM.IntPtrTy, CGM.IntPtrTy,
+                                 CGM.IntPtrTy, CGM.Int64Ty,  CGM.Int32Ty};
+        llvm::FunctionType *FnTy =
+            llvm::FunctionType::get(CGM.Int32Ty, TParams, false);
+        RTLFn = CGM.CreateRuntimeFunction(FnTy, "_cl_get_threads_blocks");
+        break;
+      }
+  }
+  return RTLFn;
 }
 
 void CGOpenMPRuntimeOCL::emitTargetOutlinedFunction(
@@ -649,20 +757,17 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
   llvm::errs() << "OCL::emitParallelCall\n";
 
   llvm::SmallVector<llvm::Value *, 16> RealArgs;
+  /*
   RealArgs.push_back(
       llvm::ConstantPointerNull::get(CGF.CGM.Int32Ty->getPointerTo(
           CGM.getContext().getTargetAddressSpace(LangAS::opencl_generic))));
   RealArgs.push_back(
       llvm::ConstantPointerNull::get(CGF.CGM.Int32Ty->getPointerTo(
           CGM.getContext().getTargetAddressSpace(LangAS::opencl_generic))));
+  */
   RealArgs.append(CapturedVars.begin(), CapturedVars.end());
 
   llvm::Function *F = cast<llvm::Function>(OutlinedFn);
-
-  llvm::errs() << "Function Type:\n";
-  F->getFunctionType()->dump();
-  llvm::errs() << "  number of params: " << F->getFunctionType()->getNumParams()
-               << "\n";
 
   emitMasterHeader(CGF);
 
@@ -674,19 +779,19 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
       CGM.getContext().getTargetAddressSpace(LangAS::opencl_generic);
 
   emitMasterFooter();
-  // memory fence to wait for stores to local mem:
-  if (emitBarrier) {
-    // call opencl write_mem_fence
-    llvm::Value *arg[] = {
-        CGF.Builder.getInt32(1 << 0)}; //CLK_LOCAL_MEM_FENCE   0x01
-    CGF.EmitRuntimeCall(createRuntimeFunction(write_mem_fence), arg);
-  }
-  llvm::errs() << "Args:\n";
+
+  llvm::outs() << "Args:\n";
   for (llvm::Value *arg : RealArgs) {
     arg->dump();
   }
+
   // call outlined parallel function:
-  CGF.EmitCallOrInvoke(OutlinedFn, RealArgs);
+  // CGF.EmitCallOrInvoke(OutlinedFn, RealArgs);
+
+  // Emit code to reference the file that contain the kernels
+  const std::string FileName = CGM.OpenMPSupport.getTempName();
+  llvm::Value *FileStr = CGF.Builder.CreateGlobalStringPtr(FileName);
+  CGF.EmitRuntimeCall(createRuntimeFunction(_cl_create_program), FileStr);
 
   if (isTargetParallel) {
     return;
@@ -702,12 +807,6 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
     CGF.Builder.CreateAlignedStore(
         sharedVar, pair.first,
         CGM.getDataLayout().getPrefTypeAlignment(sharedVar->getType()));
-  }
-  if (emitBarrier) {
-    // call opencl read_mem_fence
-    llvm::Value *arg[] = {
-        CGF.Builder.getInt32(1 << 0)}; //CLK_LOCAL_MEM_FENCE   0x01
-    CGF.EmitRuntimeCall(createRuntimeFunction(read_mem_fence), arg);
   }
   if (inParallel) {
     emitMasterFooter();
@@ -787,13 +886,6 @@ void CGOpenMPRuntimeOCL::emitBarrierCall(CodeGenFunction &CGF,
                                          bool EmitChecks,
                                          bool ForceSimpleCall) {
     llvm::errs() << "OCL::emitBarrierCall\n";
-  if (!CGF.HaveInsertPoint())
-    return;
-
-  // call opencl work group barrier
-  llvm::Value *arg[] = {
-      CGF.Builder.getInt32(1 << 1)}; //CLK_GLOBAL_MEM_FENCE   0x02
-  CGF.EmitRuntimeCall(createRuntimeFunction(work_group_barrier), arg);
 }
 
 void CGOpenMPRuntimeOCL::emitForStaticInit(
@@ -990,9 +1082,10 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
     auto CurCap = CS->capture_begin();
 
     int idx = 0;
-    // start storing shared data into a string to be used by OpenCl kernel
+    // start storing shared data types and names to be used by clang-pcg
     std::string incStr;
     llvm::raw_string_ostream Inc(incStr);
+    Inc << "\n#Args:\n";
 
     for (CapturedStmt::const_capture_init_iterator I = CS->capture_init_begin(),
                                                    E = CS->capture_init_end();
@@ -1038,8 +1131,9 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
         Inc << "\n";
 
         // Debug
-        llvm::errs() << "Function arg(" << idx << "):";
-        cast<Decl>(OrigVD)->print(llvm::errs()); llvm::errs() << "\n";
+        llvm::outs() << "Function arg(" << idx << "):";
+        cast<Decl>(OrigVD)->print(llvm::outs());
+        llvm::outs() << "\n";
         // end Debug
 
         // If the variable does not have local storage it is always a reference.
@@ -1081,7 +1175,9 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
       addFieldToRecordDecl(C, SharedThreadRD, QTy);
     }
 
-    CGF.CGM.OpenMPSupport.appendIncludeStr(Inc.str());
+    // Save the data type & names of args.
+    // They will be used by CGOpenMPRegionInfo::EmitBody
+    CGF.CGM.OpenMPSupport.saveArgsStr(Inc.str());
 
     // Add loop bounds if required.
      DoOnSharedLoopBounds(*Dir, [&AlreadySharedDecls, &C, &Info, &SharedMasterRD,

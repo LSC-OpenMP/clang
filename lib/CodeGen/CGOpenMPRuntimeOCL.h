@@ -32,16 +32,24 @@ public:
   CodeGenFunction *currentCGF;
 
 protected:
-  enum OpenMPRTLFunctionSPIR {
-    get_global_id,
-    get_local_id,
-    get_local_size,
-    get_num_groups,
-    get_group_id,
-    work_group_barrier,
-    mem_fence,
-    read_mem_fence,
-    write_mem_fence
+  enum OpenMPRTLKernelFunction {
+    _cl_create_read_only,
+    _cl_create_write_only,
+    _cl_offloading_read_only,
+    _cl_offloading_write_only,
+    _cl_create_read_write,
+    _cl_offloading_read_write,
+    _cl_read_buffer,
+    _cl_write_buffer,
+    _cl_create_program,
+    _cl_create_kernel,
+    _cl_set_kernel_args,
+    _cl_set_kernel_arg,
+    _cl_set_kernel_hostArg,
+    _cl_execute_kernel,
+    _cl_execute_tiled_kernel,
+    _cl_release_buffer,
+    _cl_get_threads_blocks
   };
 
   llvm::DenseSet<DeclarationName> globals;
@@ -61,7 +69,7 @@ protected:
   void GenOpenCLArgMetadata(const RecordDecl *FD, llvm::Function *Fn,
                             CodeGenModule &CGM);
 
-  llvm::Constant *createRuntimeFunction(OpenMPRTLFunctionSPIR Function);
+  llvm::Constant *createRuntimeFunction(OpenMPRTLKernelFunction Function);
 
   bool targetHasInnerOutlinedFunction(OpenMPDirectiveKind kind);
 

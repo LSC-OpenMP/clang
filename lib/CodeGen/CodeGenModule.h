@@ -1179,8 +1179,10 @@ public:
 
   /* marcio */
 
-  /// Name of the include file used by omp declare target constructs
+  /// Names used by clang-pcg
   std::string IncludeStr = "";
+  std::string ArgsStr = "";
+  std::string KernelName = "";
 
   class OpenMPSupportStackTy {
     struct OMPStackElemTy {
@@ -1194,7 +1196,6 @@ public:
       llvm::SmallVector<QualType, 16> LocalTypes;
       llvm::SmallVector<llvm::Value *, 16> ScopVars;
       llvm::SmallVector<QualType, 16> ScopTypes;
-      std::string KernelName;
       OMPStackElemTy(CodeGenModule &CGM) : CGM(CGM) {}
       ~OMPStackElemTy() {}
     };
@@ -1287,17 +1288,21 @@ public:
     }
 
     int createTempFile() {
-      char *tmpName = strdup("kernel_XXXXXX");
-      int fd = mkstemp(tmpName);
-      OpenMPStack.back().KernelName = std::string(tmpName);
-      return fd;
+        char *tmpName = strdup("kernel_XXXXXX");
+        int fd = mkstemp(tmpName);
+        CGM.KernelName = std::string(tmpName);
+        return fd;
     }
 
-    std::string getTempName() { return OpenMPStack.back().KernelName; }
+    std::string getTempName() { return CGM.KernelName; }
 
     std::string getIncludeStr() { return CGM.IncludeStr; }
 
+    std::string getArgsStr() { return CGM.ArgsStr; }
+
     void appendIncludeStr(std::string incStr) { CGM.IncludeStr += incStr; }
+
+    void saveArgsStr(std::string incStr) { CGM.ArgsStr = incStr; }
   };
 
   OpenMPSupportStackTy OpenMPSupport;
