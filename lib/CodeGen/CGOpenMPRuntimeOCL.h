@@ -348,16 +348,8 @@ public:
   void registerParallelContext(CodeGenFunction &CGF,
                                const OMPExecutableDirective &S) override;
 
+  private:
 
-  /// \brief Emit code for the loop-based directives for opencl/spir target.
-  virtual void EmitOMPLoopAsCLKernel(CodeGenFunction &CGF,
-                                     const OMPLoopDirective &S);
-
-  /// \brief Emit code for the reduction directives for opencl/spir target.
-  virtual void EmitOMPReductionAsCLKernel(CodeGenFunction &CGF,
-                                          const OMPLoopDirective &S);
-
-private:
   // \brief Map between a context and its data sharing information.
   typedef llvm::DenseMap<const Decl *, DataSharingInfo> DataSharingInfoMapTy;
   DataSharingInfoMapTy DataSharingInfoMap;
@@ -408,19 +400,6 @@ private:
   // code generarion.
   const Decl *CurrentParallelContext = nullptr;
 
-
-
-
-  unsigned GetNumNestedLoops(const OMPExecutableDirective &S);
-
-  llvm::Value *EmitHostParameters(ForStmt *FS, llvm::raw_fd_ostream &FOS,
-                                  unsigned &num_args, bool Collapse,
-                                  unsigned loopNest, unsigned lastLoop);
-
-  llvm::Value *EmitSpirDeclRefLValue(const DeclRefExpr *D);
-
-  void HandleStmts(Stmt *ST, llvm::raw_fd_ostream &CLOS, unsigned &num_args,
-                   bool CLgen);
 };
 
 } // namespace CodeGen

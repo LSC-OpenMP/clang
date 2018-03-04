@@ -112,7 +112,7 @@ private:
 };
 
 void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt *S) {
-  llvm::errs() << "OCL::EmitBody\n";
+  llvm::outs() << "OCL::EmitBody\n";
   if (!CGF.HaveInsertPoint())
     return;
   /* CGF.EHStack.pushTerminate(); */
@@ -123,18 +123,28 @@ void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt *S) {
   std::string includeContents = CGM.OpenMPSupport.getIncludeStr();
   std::string argsStr = CGM.OpenMPSupport.getArgsStr();
 
+  // Add the basic c header files.
+  CLOS << "#include <stdlib.h>\n";
+  CLOS << "#include <stdint.h>\n";
+  CLOS << "#include <math.h>\n\n";
+
   if (includeContents != "") {
       // There are OpenMP Declare statements
       CLOS << includeContents << "\n";
   }
 
+  CLOS << "void foo (\n";
+  CLOS << argsStr << ") {\n";
   // Dump the args and the loop body for clang-pcg
-  CLOS << argsStr << "\n#Body:\n";
+  CLOS << "\n#pragma scop\n";
   S->printPretty(CLOS, nullptr, PrintingPolicy(CGF.getContext().getLangOpts()), 4);
+  CLOS << "\n#pragma endscop\n}\n";
   CLOS.close();
 
   // Insert call to clang-pcg, the polyhedral code generation module
-  std::string pcg = "clang-pcg " + FileName;
+  const std::string cName = FileName + ".c";
+  rename(FileName.c_str(), cName.c_str());
+  std::string pcg = "clang-pcg " + cName;
   std::system(pcg.c_str());
 
   /* CGF.EHStack.popTerminate(); */
@@ -283,7 +293,6 @@ static llvm::Value *emitParallelOCLOutlinedFunction(
     const VarDecl *ThreadIDVar, OpenMPDirectiveKind InnermostKind,
     const RegionCodeGenTy &CodeGen, unsigned CaptureLevel,
     unsigned ImplicitParamStop) {
-    llvm::errs() << "OCL::emitParallelOCLOutlinedFunction\n";
   assert(ThreadIDVar->getType()->isPointerType() &&
          "thread id variable must be of type kmp_int32 *");
   const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
@@ -301,7 +310,6 @@ static llvm::Value *emitParallelOCLOutlinedFunction(
   CGOpenMPOutlinedRegionInfo CGInfo(*CS, ThreadIDVar,
                             CodeGen, InnermostKind, HasCancel);
   CodeGenFunction::CGCapturedStmtRAII CapInfoRAII(CGF, &CGInfo);
-  llvm::errs() << "OCL::Calling GenerateOpenMPCapturedStmtFunction\n";
   return CGF.GenerateOpenMPCapturedStmtFunction(
       *CS, /*UseCapturedArgumentsOnly=*/false, CaptureLevel, ImplicitParamStop);
 }
@@ -309,7 +317,6 @@ static llvm::Value *emitParallelOCLOutlinedFunction(
 
 CGOpenMPRuntimeOCL::CGOpenMPRuntimeOCL(CodeGenModule &CGM)
     : CGOpenMPRuntime(CGM) {
-  llvm::errs() << "Creating OpenMPRuntimeOCL object\n";
   if (!CGM.getLangOpts().OpenMPIsDevice)
     llvm_unreachable("OpenMP opencl/spir can only handle device code.");
 }
@@ -336,7 +343,6 @@ void CGOpenMPRuntimeOCL::emitNumThreadsFooter(CodeGenFunction &CGF) {
 
 bool CGOpenMPRuntimeOCL::targetHasInnerOutlinedFunction(
     OpenMPDirectiveKind kind) {
-    llvm::errs() << "OCL::targetHasInnerOutlinedFunction\n";
   switch (kind) {
   case OpenMPDirectiveKind::OMPD_target_parallel:
   case OpenMPDirectiveKind::OMPD_target_parallel_for:
@@ -355,7 +361,6 @@ bool CGOpenMPRuntimeOCL::targetHasInnerOutlinedFunction(
 
 bool CGOpenMPRuntimeOCL::teamsHasInnerOutlinedFunction(
     OpenMPDirectiveKind kind) {
-    llvm::errs() << "OCL::teamsHasInnerOutlinedFunction\n";
   switch (kind) {
   case OpenMPDirectiveKind::OMPD_teams_distribute_parallel_for:
   case OpenMPDirectiveKind::OMPD_teams_distribute_parallel_for_simd:
@@ -371,7 +376,7 @@ bool CGOpenMPRuntimeOCL::teamsHasInnerOutlinedFunction(
 void CGOpenMPRuntimeOCL::GenOpenCLArgMetadata(const RecordDecl *FD,
                                               llvm::Function *Fn,
                                               CodeGenModule &CGM) {
-  llvm::errs() << "OCL::GenOpenCLArgMetadata\n";
+  llvm::outs() << "OCL::GenOpenCLArgMetadata\n";
   CodeGenFunction CGF(CGM);
   llvm::LLVMContext &Context = CGM.getLLVMContext();
   CGBuilderTy Builder = CGF.Builder;
@@ -662,7 +667,8 @@ void CGOpenMPRuntimeOCL::emitTargetOutlinedFunction(
   if (!IsOffloadEntry) // Nothing to do.
     return;
 
-  llvm::errs() << "OCL::emitTargetOutlinedFunction {\n";
+  llvm::outs() << "OCL::emitTargetOutlinedFunction\n";
+
   assert(!ParentName.empty() && "Invalid target region parent name!");
   /* CapturedStmt &CS = *cast<CapturedStmt>(D.getAssociatedStmt()); */
   /* for (auto capture : CS.captures()) { */
@@ -689,7 +695,7 @@ void CGOpenMPRuntimeOCL::emitTargetOutlinedFunction(
   OutlinedFn->addFnAttr(llvm::Attribute::NoUnwind);
   OutlinedFn->removeFnAttr(llvm::Attribute::OptimizeNone);
 
-  llvm::errs() << "OCL::Dumping outlined function:\n";
+  llvm::outs() << "OCL::Dumping outlined function:\n";
   OutlinedFn->dump();
 
   /* TODO: Check if this is necessary */
@@ -702,7 +708,7 @@ llvm::Value *CGOpenMPRuntimeOCL::emitParallelOutlinedFunction(
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel, unsigned ImplicitParamStop) {
 
-  llvm::errs() << "OCL::emitParallelOutlinedFunction\n";
+  llvm::outs() << "OCL::emitParallelOutlinedFunction\n";
   this->emitMasterFooter();
 
   llvm::DenseSet<const VarDecl *> Lastprivates;
@@ -754,7 +760,7 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
-  llvm::errs() << "OCL::emitParallelCall\n";
+  llvm::outs() << "OCL::emitParallelCall\n";
 
   llvm::SmallVector<llvm::Value *, 16> RealArgs;
   /*
@@ -780,10 +786,9 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
 
   emitMasterFooter();
 
-  llvm::outs() << "Args:\n";
-  for (llvm::Value *arg : RealArgs) {
-    arg->dump();
-  }
+  /* for (llvm::Value *arg : RealArgs) { */
+  /*   arg->dump(); */
+  /* } */
 
   // call outlined parallel function:
   // CGF.EmitCallOrInvoke(OutlinedFn, RealArgs);
@@ -792,6 +797,47 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
   const std::string FileName = CGM.OpenMPSupport.getTempName();
   llvm::Value *FileStr = CGF.Builder.CreateGlobalStringPtr(FileName);
   CGF.EmitRuntimeCall(createRuntimeFunction(_cl_create_program), FileStr);
+
+  int workSizes[8][3];
+  int blockSizes[8][3];
+  int kernelId, upperKernel = 0;
+  int k = 0;
+  for (kernelId = 0; kernelId < 8; ++kernelId) {
+     for (int j = 0; j < 3; j++) {
+         workSizes[kernelId][j] = 0;
+         blockSizes[kernelId][j] = 0;
+     }
+  }
+  std::vector<std::pair<int, std::string>> pName;
+  std::ifstream argFile(FileName);
+  if (argFile.is_open()) {
+      int kind, index;
+      std::string arg_name;
+      int last_KernelId = -1;
+      while (argFile >> kernelId) {
+          assert(kernelId < 8 && "Invalid kernel identifier");
+          if (kernelId != last_KernelId) {
+              last_KernelId = kernelId;
+              argFile >> workSizes[kernelId][0] >> workSizes[kernelId][1] >> workSizes[kernelId][2];
+              argFile >> kernelId;
+              assert(kernelId == last_KernelId && "Invalid kernel structure");
+              argFile >> blockSizes[kernelId][0] >> blockSizes[kernelId][1] >> blockSizes[kernelId][2];
+              argFile >> kernelId;
+              assert(kernelId == last_KernelId && "Invalid kernel structure");
+          }
+          argFile >> kind >> index >> arg_name;
+          if (kind == 1) {
+              vectorNames[kernelId].push_back(std::pair<int, std::string>(index, arg_name));
+          } else if (kind == 2) {
+              scalarNames[kernelId].push_back(std::pair<int, std::string>(index, arg_name));
+          } else
+              assert (false && "Invalid kernel structure");
+      }
+      upperKernel = kernelId;
+      argFile.close();
+  }
+
+
 
   if (isTargetParallel) {
     return;
@@ -821,7 +867,7 @@ llvm::Value *CGOpenMPRuntimeOCL::emitTeamsOutlinedFunction(
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel, unsigned ImplicitParamStop) {
 
-  llvm::errs() << "OCL::emitTeamsOutlinedFunction\n";
+  llvm::outs() << "OCL::emitTeamsOutlinedFunction\n";
 
   OutlinedFunctionRAII RAII(*this, CGM);
   class TeamsPrePostActionTy : public PrePostActionTy {
@@ -854,7 +900,7 @@ void CGOpenMPRuntimeOCL::emitTeamsCall(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
-  llvm::errs() << "OCL::emitTeamsCall {\n";
+  llvm::outs() << "OCL::emitTeamsCall\n";
   emitMasterFooter();
   llvm::SmallVector<llvm::Value *, 16> OutlinedFnArgs;
   OutlinedFnArgs.push_back(
@@ -865,7 +911,6 @@ void CGOpenMPRuntimeOCL::emitTeamsCall(CodeGenFunction &CGF,
           CGM.getContext().getTargetAddressSpace(LangAS::opencl_generic))));
   OutlinedFnArgs.append(CapturedVars.begin(), CapturedVars.end());
   CGF.EmitCallOrInvoke(OutlinedFn, OutlinedFnArgs);
-  llvm::errs() << "}\n";
 }
 
 void CGOpenMPRuntimeOCL::emitMasterRegion(CodeGenFunction &CGF,
@@ -874,7 +919,7 @@ void CGOpenMPRuntimeOCL::emitMasterRegion(CodeGenFunction &CGF,
   if (!CGF.HaveInsertPoint())
     return;
 
-  llvm::errs() << "OCL::emitMasterRegion\n";
+  llvm::outs() << "OCL::emitMasterRegion\n";
   emitMasterHeader(CGF);
   emitInlinedDirective(CGF, OMPD_master, MasterOpGen);
   emitMasterFooter();
@@ -893,14 +938,14 @@ void CGOpenMPRuntimeOCL::emitForStaticInit(
     const OpenMPScheduleTy &ScheduleKind,
     const CGOpenMPRuntime::StaticRTInput &Values) {
 
-  llvm::errs() << "OCL::EmitForStaticInit\n";
+  llvm::outs() << "OCL::EmitForStaticInit\n";
 }
 
 void CGOpenMPRuntimeOCL::emitForStaticFinish(CodeGenFunction &CGF,
                                              SourceLocation Loc,
                                              bool CoalescedDistSchedule) {
 
-  llvm::errs() << "OCL::EmitForStaticFinish\n";
+  llvm::outs() << "OCL::EmitForStaticFinish\n";
 }
 
 void CGOpenMPRuntimeOCL::emitForDispatchInit(
@@ -916,7 +961,7 @@ void CGOpenMPRuntimeOCL::emitForDispatchFinish(CodeGenFunction &CGF,
                                                SourceLocation Loc,
                                                unsigned IVSize, bool IVSigned) {
 
-   llvm::errs() << "CGOpenMPRuntimeOCL::emitForDispatchFinish\n";
+   llvm::outs() << "CGOpenMPRuntimeOCL::emitForDispatchFinish\n";
 }
 
 void CGOpenMPRuntimeOCL::emitDistributeStaticInit(
@@ -924,14 +969,14 @@ void CGOpenMPRuntimeOCL::emitDistributeStaticInit(
     OpenMPDistScheduleClauseKind SchedKind,
     const CGOpenMPRuntime::StaticRTInput &Values, bool Coalesced) {
 
-  llvm::errs() << "OCL::emitDistributeStaticInit\n";
+  llvm::outs() << "OCL::emitDistributeStaticInit\n";
 }
 
 void CGOpenMPRuntimeOCL::emitNumThreadsClause(CodeGenFunction &CGF,
                                               llvm::Value *NumThreads,
                                               SourceLocation Loc) {
 
-  llvm::errs() << "OCL::emitNumThreadsClause\n";
+  llvm::outs() << "OCL::emitNumThreadsClause\n";
 }
 
 void CGOpenMPRuntimeOCL::emitNumTeamsClause(CodeGenFunction &CGF,
@@ -939,7 +984,7 @@ void CGOpenMPRuntimeOCL::emitNumTeamsClause(CodeGenFunction &CGF,
                                             const Expr *ThreadLimit,
                                             SourceLocation Loc) {
 
-  llvm::errs() << "OCL::emitNumTeamsClause\n";
+  llvm::outs() << "OCL::emitNumTeamsClause\n";
 }
 
 bool CGOpenMPRuntimeOCL::isStaticNonchunked(
@@ -971,14 +1016,14 @@ void CGOpenMPRuntimeOCL::emitInlinedDirective(CodeGenFunction &CGF,
                                               const RegionCodeGenTy &CodeGen,
                                               bool HasCancel) {
 
-  llvm::errs() << "OCL::emitInLinedDirective\n";
+  llvm::outs() << "OCL::emitInLinedDirective\n";
 }
 
 void CGOpenMPRuntimeOCL::createOffloadEntry(llvm::Constant *ID,
                                             llvm::Constant *Addr, uint64_t Size,
                                             uint64_t Flags) {
 
-  llvm::errs() << "OCL::createOffloadEntry\n";
+  llvm::outs() << "OCL::createOffloadEntry\n";
 }
 
 static FieldDecl *addFieldToRecordDecl(ASTContext &C, DeclContext *DC,
@@ -1005,7 +1050,7 @@ void CGOpenMPRuntimeOCL::registerParallelContext(
 }
 
 void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
-    llvm::errs() << "OCL::createDataSharingInfo\n";
+    llvm::outs() << "OCL::createDataSharingInfo\n";
   auto &Context = CGF.CurCodeDecl;
   assert(Context &&
          "A parallel region is expected to be enclosed in a context.");
@@ -1085,7 +1130,6 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
     // start storing shared data types and names to be used by clang-pcg
     std::string incStr;
     llvm::raw_string_ostream Inc(incStr);
-    Inc << "\n#Args:\n";
 
     for (CapturedStmt::const_capture_init_iterator I = CS->capture_init_begin(),
                                                    E = CS->capture_init_end();
@@ -1125,16 +1169,9 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
           OrigVD = cast<VarDecl>(
               cast<DeclRefExpr>(OD->getInit()->IgnoreImpCasts())->getDecl());
 
-        idx++;
-        Inc << idx << ": ";
+        if (idx > 0) Inc << ",\n";
         cast<Decl>(OrigVD)->print(Inc);
-        Inc << "\n";
-
-        // Debug
-        llvm::outs() << "Function arg(" << idx << "):";
-        cast<Decl>(OrigVD)->print(llvm::outs());
-        llvm::outs() << "\n";
-        // end Debug
+        idx++;
 
         // If the variable does not have local storage it is always a reference.
         if (!OrigVD->hasLocalStorage())
@@ -1222,434 +1259,3 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
   Info.MasterRecordType = C.getRecordType(SharedMasterRD);
   return;
 }
-
-
-void CGOpenMPRuntimeOCL::EmitOMPLoopAsCLKernel(CodeGenFunction &CGF,
-                                               const OMPLoopDirective &S) {
-
-  llvm::errs() << "OCL::EmitOMPLoopAsCLKernel\n";
-
-  bool verbose = true; /* change to false on release */
-  bool tile = true;
-  std::string tileSize = std::to_string(16); // default tile size
-  if (auto *C = S.getSingleClause<OMPScheduleClause>()) {
-    if (const auto *Ch = C->getChunkSize()) {
-      // We only support chunk expression that folds to a constant
-      llvm::APSInt Result;
-      if (CGF.ConstantFoldsToSimpleInteger(Ch, Result)) {
-        tileSize = Result.toString(10);
-      }
-    }
-  }
-  std::string ChunkSize = "--tile-size=" + tileSize + " ";
-  bool vectorize = isOpenMPSimdDirective(S.getDirectiveKind());
-
-  // Start creating a unique filename that refers to scop function
-  llvm::raw_fd_ostream CLOS(CGM.OpenMPSupport.createTempFile(), true);
-  const std::string FileName = CGM.OpenMPSupport.getTempName();
-  const std::string clName = FileName + ".cl";
-  const std::string AuxName = FileName + ".aux";
-
-  // Add the basic c header files.
-  CLOS << "#include <stdlib.h>\n";
-  CLOS << "#include <stdint.h>\n";
-  CLOS << "#include <math.h>\n\n";
-
-  ArrayRef<llvm::Value *> MapClausePointerValues;
-  ArrayRef<llvm::Value *> MapClauseSizeValues;
-  ArrayRef<QualType> MapClauseQualTypes;
-
-  // Fix-me
-  // CGM.OpenMPSupport.getMapPos(MapClausePointerValues, MapClauseSizeValues,
-  //                              MapClauseQualTypes);
-
-  // Dump necessary typedefs in scope file
-  deftypes.clear();
-  for (ArrayRef<QualType>::iterator T = MapClauseQualTypes.begin(),
-                                    E = MapClauseQualTypes.end();
-       T != E; ++T) {
-    QualType Q = (*T);
-    if (!Q.isCanonical()) {
-      const Type *ty = Q.getTypePtr();
-      if (ty->isPointerType() || ty->isReferenceType()) {
-        Q = ty->getPointeeType();
-      }
-
-      while (Q.getTypePtr()->isArrayType()) {
-        Q = dyn_cast<ArrayType>(Q.getTypePtr())->getElementType();
-      }
-
-      if (!dumpedDefType(&Q)) {
-        std::string defty = Q.getAsString();
-        QualType B =
-            ty->getCanonicalTypeInternal().getTypePtr()->getPointeeType();
-
-        while (B.getTypePtr()->isArrayType()) {
-          B = dyn_cast<ArrayType>(B.getTypePtr())->getElementType();
-        }
-
-        ty = B.getTypePtr();
-        if (isa<RecordType>(ty)) {
-          const auto *RT = dyn_cast<RecordType>(ty);
-          RecordDecl *RD = RT->getDecl()->getDefinition();
-          RD->print(CLOS);
-          CLOS << ";\n";
-        }
-
-        if (B.isCanonical() && B.getAsString().compare(defty) != 0) {
-          CLOS << "typedef " << B.getAsString() << " " << defty << ";\n";
-        }
-      }
-    }
-  }
-
-  // Fix-me
-  // CGM.OpenMPSupport.clearScopVars();
-  // CGM.OpenMPSupport.clearKernelVars();
-  // CGM.OpenMPSupport.clearLocalVars();
-  scalarMap.clear();
-
-  CLOS << "void foo (\n";
-
-  int j = 0;
-  bool needComma = false;
-  for (ArrayRef<llvm::Value *>::iterator I = MapClausePointerValues.begin(),
-                                         E = MapClausePointerValues.end();
-       I != E; ++I) {
-
-    llvm::Value *KV = dyn_cast<llvm::User>(*I)->getOperand(0);
-    QualType QT = MapClauseQualTypes[j];
-    std::string KName = vectorMap[KV];
-
-    // Fix-me
-    // CGM.OpenMPSupport.addScopVar(KV);
-    // CGM.OpenMPSupport.addScopType(QT);
-    // CGM.OpenMPSupport.addKernelVar(KV);
-    // CGM.OpenMPSupport.addKernelType(QT);
-
-    bool isPointer = false;
-    const Type *ty = QT.getTypePtr();
-    if (ty->isPointerType() || ty->isReferenceType()) {
-      isPointer = true;
-      QT = ty->getPointeeType();
-    }
-    while (QT.getTypePtr()->isArrayType()) {
-      isPointer = true;
-      QT = dyn_cast<ArrayType>(QT.getTypePtr())->getElementType();
-    }
-
-    j++;
-    if (needComma)
-      CLOS << ",\n";
-    CLOS << "\t\t" << QT.getAsString();
-    needComma = true;
-    if (isPointer) {
-      CLOS << " *" << KName;
-    } else {
-      CLOS << "  " << KName;
-    }
-  }
-  CLOS << ") {\n";
-
-  unsigned num_args = (unsigned)CGM.OpenMPSupport.getKernelVarSize();
-  assert(num_args != 0 && "loop is not suitable to execute on GPUs");
-
-  // Traverse the Body looking for all scalar
-  // variables declared out of for scope and
-  // generate value reference to pass to kernel
-  // function
-  Stmt *Body = S.getAssociatedStmt();
-  if (auto *CS = dyn_cast_or_null<CapturedStmt>(Body)) {
-    Body = CS->getCapturedStmt();
-  }
-  if (Body->getStmtClass() == Stmt::CompoundStmtClass) {
-    auto *BS = cast<CompoundStmt>(Body);
-    for (CompoundStmt::body_iterator I = BS->body_begin(), E = BS->body_end();
-         I != E; ++I) {
-      HandleStmts(*I, CLOS, num_args, false);
-    }
-  } else {
-    HandleStmts(Body, CLOS, num_args, false);
-  }
-
-  CLOS << "\n#pragma scop\n";
-  Body->printPretty(CLOS, nullptr,
-                    PrintingPolicy(CGF.getContext().getLangOpts()), 4);
-  CLOS << "\n#pragma endscop\n}\n";
-  CLOS.close();
-
-  int workSizes[8][3];
-  int blockSizes[8][3];
-  int kernelId, upperKernel = 0;
-  int k = 0;
-  std::vector<std::pair<int, std::string>> pName;
-
-  if (!(tile || vectorize)) {
-    std::remove(FileName.c_str());
-  } else {
-    // Change the temporary name to c name
-    const std::string cName = FileName + ".c";
-    rename(FileName.c_str(), cName.c_str());
-
-    // Construct the pairs of <index, arg> that will
-    // be passed to the kernels and sort it in
-    // alphabetic order
-    for (ArrayRef<llvm::Value *>::iterator I = MapClausePointerValues.begin(),
-                                           E = MapClausePointerValues.end();
-         I != E; ++I) {
-
-      llvm::Value *PV = dyn_cast<llvm::User>(*I)->getOperand(0);
-      pName.emplace_back(std::pair<int, std::string>(k, vectorMap[PV]));
-      k++;
-    }
-    std::sort(pName.begin(), pName.end(), pairCompare);
-
-    // Try to generate a (possible optimized) kernel
-    // version using clang-pcg, a script that invoke
-    // Polyhedral Codegen. Get the loop schedule
-    // kind and chunk on pragmas:
-    //   schedule(dynamic[,chunk]) set --tile-size=chunk
-    //   schedule(static[,chunk]) also use no-reschedule
-    //   schedule(auto) or none use --tile-size=16
-    for (kernelId = 0; kernelId < 8; ++kernelId) {
-      for (j = 0; j < 3; j++) {
-        workSizes[kernelId][j] = 0;
-        blockSizes[kernelId][j] = 0;
-      }
-      vectorNames[kernelId].clear();
-      scalarNames[kernelId].clear();
-    }
-
-    // std::string ChunkSize = "--tile-size=" + tileSize + " ";
-    bool hasScheduleStatic = false;
-    for (ArrayRef<OMPClause *>::iterator I = S.clauses().begin(),
-                                         E = S.clauses().end();
-         I != E; ++I) {
-      OpenMPClauseKind ckind = ((*I)->getClauseKind());
-      if (ckind == OMPC_schedule) {
-        auto *C = cast<OMPScheduleClause>(*I);
-        OpenMPScheduleClauseKind ScheduleKind = C->getScheduleKind();
-        if (ScheduleKind == OMPC_SCHEDULE_static ||
-            ScheduleKind == OMPC_SCHEDULE_dynamic) {
-          hasScheduleStatic = ScheduleKind == OMPC_SCHEDULE_static;
-          Expr *CSExpr = C->getChunkSize();
-          if (CSExpr) {
-            llvm::APSInt Ch;
-            if (CSExpr->EvaluateAsInt(Ch, CGM.getContext())) {
-              ChunkSize = "--tile-size=" + Ch.toString(10) + " ";
-            }
-          }
-        }
-      }
-    }
-
-    if (!tile) {
-      ChunkSize = "--no-reschedule --tile-size=1 "
-                  "--no-shared-memory "
-                  "--no-private-memory ";
-    } else if (vectorize) {
-      // Vector optimization use tile-size=4, the
-      // preferred vector size for float. Also, turn
-      // off the use of shared & private memories.
-      ChunkSize = "--tile-size=4 "
-                  "--no-shared-memory "
-                  "--no-private-memory ";
-    }
-
-    std::string pcg;
-    if (verbose) {
-      pcg = "clang-pcg --verbose " + ChunkSize;
-      if (hasScheduleStatic)
-        pcg = pcg + "--no-reschedule ";
-    } else {
-      pcg = "clang-pcg " + ChunkSize;
-      if (hasScheduleStatic)
-        pcg = pcg + "--no-reschedule ";
-    }
-
-    const std::string polycg = pcg + cName;
-    std::system(polycg.c_str());
-    // verbose preserve temp files (for debug
-    // purposes)
-    if (!verbose) {
-      const std::string rmCfile = "rm " + FileName + ".c";
-      std::system(rmCfile.c_str());
-      const std::string rmHfile = "rm " + FileName + "_host.c";
-      std::system(rmHfile.c_str());
-    }
-
-    std::ifstream argFile(FileName);
-    if (argFile.is_open()) {
-      int kind, index;
-      std::string arg_name;
-      int last_KernelId = -1;
-      while (argFile >> kernelId) {
-        assert(kernelId < 8 && "Invalid kernel identifier");
-        if (kernelId != last_KernelId) {
-          last_KernelId = kernelId;
-          argFile >> workSizes[kernelId][0] >> workSizes[kernelId][1] >>
-              workSizes[kernelId][2];
-          argFile >> kernelId;
-          assert(kernelId == last_KernelId && "Invalid kernel structure");
-          argFile >> blockSizes[kernelId][0] >> blockSizes[kernelId][1] >>
-              blockSizes[kernelId][2];
-          argFile >> kernelId;
-          assert(kernelId == last_KernelId && "Invalid kernel structure");
-        }
-        argFile >> kind >> index >> arg_name;
-        if (kind == 1) {
-          vectorNames[kernelId].emplace_back(
-              std::pair<int, std::string>(index, arg_name));
-        } else if (kind == 2) {
-          scalarNames[kernelId].emplace_back(
-              std::pair<int, std::string>(index, arg_name));
-        } else
-          assert(false && "Invalid kernel structure");
-      }
-      upperKernel = kernelId;
-      argFile.close();
-    }
-
-    if (!verbose)
-      std::remove(FileName.c_str());
-  }
-
-  // Emit code to load the file that contain the kernels
-  llvm::Value *Status = nullptr;
-  llvm::Value *FileStr = CGF.Builder.CreateGlobalStringPtr(FileName);
-
-  // CLgen control whether ppcg sucessfully generate the kernel
-  // If ppcg returns workSizes = 0, meaning that optimization didn't work.
-  bool CLgen = true;
-  if (tile || vectorize)
-    if (workSizes[0][0] != 0)
-      CLgen = false;
-
-  // Also, check if all scalars used to construct kernel was declared on host
-  if (!CLgen) {
-    for (kernelId = 0; kernelId < upperKernel; kernelId++) {
-      for (std::vector<std::pair<int, std::string>>::iterator
-               I = scalarNames[kernelId].begin(),
-               E = scalarNames[kernelId].end();
-           I != E; ++I) {
-        if (scalarMap[(I)->second] == nullptr) {
-          CLgen = true;
-          break;
-        }
-      }
-    }
-  }
-
-  // Look for CollapseNum
-  bool hasCollapseClause = false;
-  unsigned CollapseNum, loopNest;
-  // If Collapse clause is not empty, get the
-  // collapsedNum,
-  for (ArrayRef<OMPClause *>::iterator I = S.clauses().begin(),
-                                       E = S.clauses().end();
-       I != E; ++I) {
-    OpenMPClauseKind ckind = ((*I)->getClauseKind());
-    if (ckind == OMPC_collapse) {
-      hasCollapseClause = true;
-      /* FIX-ME: CollapseNum =
-       * getCollapsedNumberFromLoopDirective(&S); */
-    }
-  }
-
-  // Look for number of loop nest.
-  loopNest = GetNumNestedLoops(S);
-  if (!hasCollapseClause)
-    CollapseNum = loopNest;
-  assert(loopNest <= 3 && "Invalid number of Loop nest.");
-  assert(CollapseNum <= 3 && "Invalid number of Collapsed Loops.");
-
-  // nCores is used only with CLgen, but must be declared outside it
-  SmallVector<llvm::Value *, 3> nCores;
-
-  // Generate kernel with vectorization ?
-  if (vectorize) {
-    const std::string vectorizer = "$LLVM_INCLUDE_PATH/vectorize/vectorize "
-                                   "-silent " +
-                                   clName;
-    std::system(vectorizer.c_str());
-    if (!verbose) {
-      struct stat buffer;
-      if (stat(AuxName.c_str(), &buffer) == 0) {
-        std::remove(AuxName.c_str());
-      }
-    }
-  }
-
-  // Generate the spir-code ?
-  if (CGM.getTriple().isSPIR()) {
-    std::string tgtStr;
-    tgtStr = CGM.getTriple().str();
-    const std::string bcArg = "clang -cc1 -x cl -cl-std=CL1.2 "
-                              "-fno-builtin "
-                              "-emit-llvm-bc -triple " +
-                              tgtStr +
-                              " -include "
-                              "$LLVM_INCLUDE_PATH/llvm/SpirTools/"
-                              "opencl_spir.h "
-                              "-ffp-contract=off -o " +
-                              AuxName + " " + clName;
-    std::system(bcArg.c_str());
-
-    const std::string encodeStr =
-        "spir-encoder " + AuxName + " " + FileName + ".bc";
-    std::system(encodeStr.c_str());
-    std::remove(AuxName.c_str());
-  }
-
-  if (!CLgen) {
-    for (kernelId = 0; kernelId <= upperKernel; kernelId++) {
-      llvm::Value *KernelStr = CGF.Builder.CreateGlobalStringPtr(
-          FileName + std::to_string(kernelId));
-      int wD;
-      if (workSizes[kernelId][2] != 0)
-        wD = 3;
-      else if (workSizes[kernelId][1] != 0)
-        wD = 2;
-      else
-        wD = 1;
-      llvm::Value *workDim =
-          CGF.Builder.CreateGlobalStringPtr(std::to_string(wD));
-      llvm::Value *ws0 = CGF.Builder.CreateGlobalStringPtr(
-          std::to_string(workSizes[kernelId][0]));
-      llvm::Value *ws1 = CGF.Builder.CreateGlobalStringPtr(
-          std::to_string(workSizes[kernelId][1]));
-      llvm::Value *ws2 = CGF.Builder.CreateGlobalStringPtr(
-          std::to_string(workSizes[kernelId][2]));
-      llvm::Value *bl0 = CGF.Builder.CreateGlobalStringPtr(
-          std::to_string(blockSizes[kernelId][0]));
-      llvm::Value *bl1 = CGF.Builder.CreateGlobalStringPtr(
-          std::to_string(blockSizes[kernelId][1]));
-      llvm::Value *bl2 = CGF.Builder.CreateGlobalStringPtr(
-          std::to_string(blockSizes[kernelId][2]));
-    }
-  }
-}
-
-/// \brief Emit code for the reduction directives for opencl/spir target.
-void CGOpenMPRuntimeOCL::EmitOMPReductionAsCLKernel(CodeGenFunction &CGF,
-                                                    const OMPLoopDirective &S) {
-}
-
-unsigned
-CGOpenMPRuntimeOCL::GetNumNestedLoops(const OMPExecutableDirective &S) {
-  return 0;
-}
-
-llvm::Value *
-CGOpenMPRuntimeOCL::EmitHostParameters(ForStmt *FS, llvm::raw_fd_ostream &FOS,
-                                       unsigned &num_args, bool Collapse,
-                                       unsigned loopNest, unsigned lastLoop) {
-  return nullptr;
-}
-
-llvm::Value *CGOpenMPRuntimeOCL::EmitSpirDeclRefLValue(const DeclRefExpr *D) {
-  return nullptr;
-}
-
-void CGOpenMPRuntimeOCL::HandleStmts(Stmt *ST, llvm::raw_fd_ostream &CLOS,
-                                     unsigned &num_args, bool CLgen) {}
