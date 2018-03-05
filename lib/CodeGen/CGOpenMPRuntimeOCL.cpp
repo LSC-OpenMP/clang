@@ -185,24 +185,13 @@ enum DATA_SHARING_SIZES {
   DS_Max_Blocks = 32
 };
 
-std::vector<std::pair<int, std::string>> vectorNames[8];
-std::vector<std::pair<int, std::string>> scalarNames[8];
-
-std::map<llvm::Value *, std::string> vectorMap;
-std::map<std::string, llvm::Value *> scalarMap;
-
-llvm::SmallVector<QualType, 16> deftypes;
-
-bool dumpedDefType(const QualType *T) {
-  for (ArrayRef<QualType>::iterator I = deftypes.begin(), E = deftypes.end();
-       I != E; ++I) {
-    if ((*I).getAsString() == T->getAsString())
-      return true;
-  }
-  deftypes.push_back(*T);
-  return false;
-}
-
+// bufferNames keeps the order in which the buffers are
+// created during the offloading data
+std::vector<std::pair<int, std::string>> bufferNames;
+// paramNames keeps the order in which the parameters are
+// in the kernel function signature
+std::vector<std::pair<int, std::string>> paramNames[8];
+// pairCompare compare two strings in the above structures
 bool pairCompare(const std::pair<int, std::string> &p1,
                  const std::pair<int, std::string> &p2) {
   return p1.second < p2.second;
@@ -218,25 +207,6 @@ struct Required {
 private:
   std::string val_;
 };
-
-int GetTypeSizeInBits(llvm::Type *ty) {
-  int typeSize = 0;
-  if (ty->isSized()) {
-    if (ty->isStructTy()) {
-      int nElements = ty->getStructNumElements();
-      for (int i = 0; i < nElements; i++) {
-        llvm::Type *elTy = ty->getStructElementType(i);
-        typeSize += GetTypeSizeInBits(elTy);
-      }
-    } else {
-      typeSize = ty->getScalarSizeInBits();
-    }
-  } else {
-    llvm_unreachable("Unsupported data type for reduction clause");
-    typeSize = 32; /* assume i32 data type */
-  }
-  return typeSize;
-}
 
 ///
 /// Get the Variable Name inside the Value argument
@@ -778,7 +748,6 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
   emitMasterHeader(CGF);
 
   llvm::DenseMap<llvm::Value *, llvm::GlobalVariable *> sharedVariables;
-  bool emitBarrier = false;
   unsigned addrSpaceLocal =
       CGM.getContext().getTargetAddressSpace(LangAS::opencl_local);
   unsigned addrSpaceGeneric =
@@ -807,8 +776,11 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
          workSizes[kernelId][j] = 0;
          blockSizes[kernelId][j] = 0;
      }
+     paramNames[kernelId].clear();
   }
-  std::vector<std::pair<int, std::string>> pName;
+  // sort the bufferNames. Is this necessary??
+  std::sort(bufferNames.begin(), bufferNames.end(), pairCompare);
+
   std::ifstream argFile(FileName);
   if (argFile.is_open()) {
       int kind, index;
@@ -827,14 +799,49 @@ void CGOpenMPRuntimeOCL::emitParallelCall(CodeGenFunction &CGF,
           }
           argFile >> kind >> index >> arg_name;
           if (kind == 1) {
-              vectorNames[kernelId].push_back(std::pair<int, std::string>(index, arg_name));
+              paramNames[kernelId].push_back(std::pair<int, std::string>(index, arg_name));
           } else if (kind == 2) {
-              scalarNames[kernelId].push_back(std::pair<int, std::string>(index, arg_name));
+              // Note: scalar names not yet supported in this release
+              // scalarNames[kernelId].push_back(std::pair<int, std::string>(index, arg_name));
           } else
               assert (false && "Invalid kernel structure");
       }
       upperKernel = kernelId;
       argFile.close();
+  }
+
+  for (kernelId = 0; kernelId <= upperKernel; kernelId++) {
+      llvm::Value *KernelStr = CGF.Builder.CreateGlobalStringPtr(FileName + std::to_string(kernelId));
+      CGF.EmitRuntimeCall(createRuntimeFunction(_cl_create_kernel), KernelStr);
+
+      // Set kernel args according pos & index of buffer
+      k = 0;
+      for (std::vector<std::pair<int, std::string>>::iterator I = bufferNames.begin(),
+                   E = bufferNames.end();
+           I != E; ++I) {
+          std::vector<std::pair<int, std::string>>::iterator it =
+                  std::find_if(paramNames[kernelId].begin(),
+                               paramNames[kernelId].end(), Required((I)->second));
+          if (it == paramNames[kernelId].end()) {
+              // the arg is not required
+          } else {
+              llvm::Value *Args[] = {CGF.Builder.getInt32(k), CGF.Builder.getInt32((I)->first)};
+              CGF.EmitRuntimeCall(createRuntimeFunction(_cl_set_kernel_arg), Args);
+              k++;
+          }
+      }
+      int workDim;
+      if (workSizes[kernelId][2] != 0) workDim = 3;
+      else if (workSizes[kernelId][1] != 0) workDim = 2;
+      else workDim = 1;
+      llvm::Value *GroupSize[] = {CGF.Builder.getInt32(workSizes[kernelId][0]),
+                                  CGF.Builder.getInt32(workSizes[kernelId][1]),
+                                  CGF.Builder.getInt32(workSizes[kernelId][2]),
+                                  CGF.Builder.getInt32(blockSizes[kernelId][0]),
+                                  CGF.Builder.getInt32(blockSizes[kernelId][1]),
+                                  CGF.Builder.getInt32(blockSizes[kernelId][2]),
+                                  CGF.Builder.getInt32(workDim)};
+      CGF.EmitRuntimeCall(createRuntimeFunction(_cl_execute_tiled_kernel), GroupSize);
   }
 
 
@@ -1127,9 +1134,11 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
     auto CurCap = CS->capture_begin();
 
     int idx = 0;
-    // start storing shared data types and names to be used by clang-pcg
+    // store the shared data types and names to be used by clang-pcg
     std::string incStr;
     llvm::raw_string_ostream Inc(incStr);
+    // also, store the order of the shared data, same as buffer creation
+    bufferNames.clear();
 
     for (CapturedStmt::const_capture_init_iterator I = CS->capture_init_begin(),
                                                    E = CS->capture_init_end();
@@ -1171,6 +1180,7 @@ void CGOpenMPRuntimeOCL::createDataSharingInfo(CodeGenFunction &CGF) {
 
         if (idx > 0) Inc << ",\n";
         cast<Decl>(OrigVD)->print(Inc);
+        bufferNames.push_back(std::pair<int, std::string>(idx, cast<NamedDecl>(OrigVD)->getNameAsString()));
         idx++;
 
         // If the variable does not have local storage it is always a reference.
