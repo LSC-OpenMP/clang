@@ -30,7 +30,26 @@ using namespace CodeGen;
 
 #define VERBOSE 1
 
+CGOpenMPRuntimeSpark::CGOpenMPRuntimeSpark(CodeGenModule &CGM)
+    : CGOpenMPRuntime(CGM) {
+  llvm::errs() << "CGOpenMPRuntimeSpark\n";
+  if (!CGM.getLangOpts().OpenMPIsDevice)
+    llvm_unreachable("OpenMP Spark can only handle device code.");
+}
+
+void CGOpenMPRuntimeSpark::emitTargetOutlinedFunction(
+    const OMPExecutableDirective &D, StringRef ParentName,
+    llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
+    bool IsOffloadEntry, const RegionCodeGenTy &CodeGen,
+    unsigned CaptureLevel) {
+  llvm::errs() << "CGOpenMPRuntimeSpark::emitTargetOutlinedFunction\n";
+  assert(!ParentName.empty() && "Invalid target region parent name!");
+  CGOpenMPRuntime::emitTargetOutlinedFunction(D, ParentName, OutlinedFn, OutlinedFnID, IsOffloadEntry, CodeGen, CaptureLevel);
+}
+
 void CGOpenMPRuntimeSpark::EmitSparkJob() {
+  llvm::errs() << "EmitSparkJob\n";
+
   std::error_code EC;
 
   // char *tmpName = strdup("_kernel_spark_XXXXXX");
@@ -1530,6 +1549,8 @@ public:
 
 void CGOpenMPRuntimeSpark::GenerateReductionKernel(
     const OMPReductionClause &C, const OMPExecutableDirective &S) {
+
+  llvm::errs() << "GenerateReductionKernel\n";
   bool verbose = VERBOSE;
 
   // Create the mapping function
@@ -1778,6 +1799,9 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
 
 void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     const OMPExecutableDirective &S) {
+
+  llvm::errs() << "GenerateMappingKernel\n";
+
   bool verbose = VERBOSE;
 
   auto& DL = CGM.getDataLayout();

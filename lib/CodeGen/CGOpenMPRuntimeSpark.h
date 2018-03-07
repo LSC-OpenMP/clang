@@ -12,8 +12,8 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIMENVPTX_H
-#define LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIMENVPTX_H
+#ifndef LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIMESPARK_H
+#define LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIMESPARK_H
 
 #include "CGOpenMPRuntime.h"
 #include "CodeGenFunction.h"
@@ -61,6 +61,25 @@ enum OpenMPOffloadMappingFlags {
 class CGOpenMPRuntimeSpark : public CGOpenMPRuntime {
 
 public:
+  explicit CGOpenMPRuntimeSpark(CodeGenModule &CGM);
+
+  /// \brief Emit outlined function for 'target' directive on the NVPTX
+  /// device.
+  /// \param D Directive to emit.
+  /// \param ParentName Name of the function that encloses the target region.
+  /// \param OutlinedFn Outlined function value to be defined by this call.
+  /// \param OutlinedFnID Outlined function ID value to be defined by this call.
+  /// \param IsOffloadEntry True if the outlined function is an offload entry.
+  /// An outlined function may not be an entry if, e.g. the if clause always
+  /// evaluates to false.
+  void emitTargetOutlinedFunction(const OMPExecutableDirective &D,
+                                  StringRef ParentName,
+                                  llvm::Function *&OutlinedFn,
+                                  llvm::Constant *&OutlinedFnID,
+                                  bool IsOffloadEntry,
+                                  const RegionCodeGenTy &CodeGen,
+                                  unsigned CaptureLevel) override;
+
   struct OMPSparkMappingInfo {
     llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
         InOutVarUse;
@@ -141,4 +160,4 @@ public:
 } // namespace CodeGen
 } // namespace clang
 
-#endif // LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIMENVPTX_H
+#endif // LLVM_CLANG_LIB_CODEGEN_CGOPENMPRUNTIMESPARK_H
