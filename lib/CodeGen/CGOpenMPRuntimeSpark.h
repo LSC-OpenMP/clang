@@ -19,6 +19,7 @@
 #include "CodeGenFunction.h"
 #include "clang/AST/StmtOpenMP.h"
 #include "llvm/IR/CallSite.h"
+#include "llvm/IR/Constant.h"
 
 namespace clang {
 namespace CodeGen {
@@ -63,6 +64,10 @@ class CGOpenMPRuntimeSpark : public CGOpenMPRuntime {
 public:
   explicit CGOpenMPRuntimeSpark(CodeGenModule &CGM);
 
+  static bool classof(const CGOpenMPRuntime *Runtime) {
+    return true;
+  }
+
   /// \brief Emit outlined function for 'target' directive on the NVPTX
   /// device.
   /// \param D Directive to emit.
@@ -79,6 +84,19 @@ public:
                                   bool IsOffloadEntry,
                                   const RegionCodeGenTy &CodeGen,
                                   unsigned CaptureLevel) override;
+
+  /// \brief Emits outlined function for the specified OpenMP parallel directive
+  /// \a D. This outlined function has type void(*)(kmp_int32 *ThreadID,
+  /// kmp_int32 BoundID, struct context_vars*).
+  /// \param D OpenMP directive.
+  /// \param ThreadIDVar Variable for thread id in the current OpenMP region.
+  /// \param InnermostKind Kind of innermost directive (for simple directives it
+  /// is a directive itself, for combined - its innermost directive).
+  /// \param CodeGen Code generation sequence for the \a D directive.
+  llvm::Value *emitParallelOutlinedFunction(
+      const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
+      OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
+      unsigned CaptureLevel = 1, unsigned ImplicitParamStop = 0) override;
 
   struct OMPSparkMappingInfo {
     llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
@@ -100,7 +118,7 @@ public:
     unsigned Identifier;
   };
 
-  unsigned CurrentIdentifier=0;
+  unsigned CurrentIdentifier = 0;
   llvm::SmallVector<OMPSparkMappingInfo *, 16> SparkMappingFunctions;
 
   bool IsSparkTargetRegion;
@@ -114,16 +132,64 @@ public:
     }
     return -1;
   }
-  unsigned getOffloadingMapCurrentIdentifier() {
-    return CurrentIdentifier++;
-  }
+  unsigned getOffloadingMapCurrentIdentifier() { return CurrentIdentifier++; }
 
   Expr *ActOnIntegerConstant(SourceLocation Loc, uint64_t Val);
   bool isNotSupportedLoopForm(Stmt *S, OpenMPDirectiveKind Kind, Expr *&InitVal,
                               Expr *&StepVal, Expr *&CheckVal, VarDecl *&VarCnt,
                               Expr *&CheckOp, BinaryOperatorKind &OpKind);
 
+  QualType jintQTy;
+  QualType jbyteQTy;
+  QualType jsizeQTy;
+  QualType jbooleanQTy;
+  QualType jlongQTy;
+
+  QualType _jobjectQTy;
+  QualType jobjectQTy;
+  QualType jarrayQTy;
+  QualType jbyteArrayQTy;
+
+  QualType _jmethodIDQTy;
+  QualType jmethodIDQTy;
+
+  QualType _JNINativeInterfaceQTy;
+  QualType JNIEnvQTy;
+  QualType jclassQTy;
+
+  llvm::Type *jintTy;
+  llvm::Type *jbyteTy;
+  llvm::Type *jsizeTy;
+  llvm::Type *jbooleanTy;
+  llvm::Type *jobjectTy;
+  llvm::Type *jlongTy;
+  llvm::Type *jarrayTy;
+  llvm::Type *jbyteArrayTy;
+  llvm::Type *jmethodIDTy;
+  llvm::Type *JNIEnvTy;
+  llvm::Type *jclassTy;
+
   void DefineJNITypes();
+  void BuildJNITy();
+  llvm::Constant *createJNIRuntimeFunction(unsigned Function);
+  llvm::Value *EmitJNINewByteArray(CodeGenFunction &CGF, llvm::Value *Size);
+  llvm::Value *EmitJNIReleaseByteArrayElements(CodeGenFunction &CGF,
+                                               llvm::Value *Array,
+                                               llvm::Value *Elems,
+                                               llvm::Value *Mode);
+  llvm::Value *EmitJNIGetByteArrayElements(CodeGenFunction &CGF,
+                                           llvm::Value *Array,
+                                           llvm::Value *IsCopy);
+  llvm::Value *EmitJNIReleasePrimitiveArrayCritical(CodeGenFunction &CGF,
+                                                    llvm::Value *Array,
+                                                    llvm::Value *Carray,
+                                                    llvm::Value *Mode);
+  llvm::Value *EmitJNIGetPrimitiveArrayCritical(CodeGenFunction &CGF,
+                                                llvm::Value *Array,
+                                                llvm::Value *IsCopy);
+  llvm::Value *EmitJNICreateNewTuple(CodeGenFunction &CGF,
+                                     ArrayRef<llvm::Value *> Elements);
+
   void GenerateMappingKernel(const OMPExecutableDirective &S);
   void GenerateReductionKernel(const OMPReductionClause &C,
                                const OMPExecutableDirective &S);
@@ -149,11 +215,23 @@ public:
            "OpenMP private variables region is not started.");
     SparkMappingFunctions.back()->KernelArgVars[VD] = 0;
   }
-  void addOffloadingMapVariable(
-      const ValueDecl *VD, unsigned Type) {
+  void addOffloadingMapVariable(const ValueDecl *VD, unsigned Type) {
     OffloadingMapVarsType[VD] = Type;
-    OffloadingMapVarsIndex[VD] =
-        getOffloadingMapCurrentIdentifier();
+    OffloadingMapVarsIndex[VD] = getOffloadingMapCurrentIdentifier();
+  }
+  /// \brief Checks, if the specified variable is currently an argument.
+  /// \return 0 if the variable is not an argument, or address of the arguments
+  /// otherwise.
+  llvm::Value *getOpenMPKernelArgVar(const VarDecl *VD) {
+    if (SparkMappingFunctions.empty()) return 0;
+    return SparkMappingFunctions.back()->KernelArgVars[VD];
+  }
+  /// \brief Checks, if the specified variable is currently an argument.
+  /// \return 0 if the variable is not an argument, or address of the arguments
+  /// otherwise.
+  llvm::Value *getOpenMPKernelArgRange(const Expr *VarExpr) {
+    if (SparkMappingFunctions.empty()) return 0;
+    return SparkMappingFunctions.back()->RangeIndexes[VarExpr];
   }
 };
 

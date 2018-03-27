@@ -269,15 +269,14 @@ void CodeGenModule::createOpenMPRuntime() {
     OpenMPRuntime.reset(new CGOpenMPRuntimeNVPTX(*this));
     break;
   default:
+    switch (getTriple().getEnvironment()) {
+    case llvm::Triple::Spark:
+      OpenMPRuntime.reset(new CGOpenMPRuntimeSpark(*this));
+      break;
     default:
-      switch (getTriple().getEnvironment()) {
-      case llvm::Triple::Spark:
-        OpenMPRuntime.reset(new CGOpenMPRuntimeSpark(*this));
-        break;
-      default:
-        OpenMPRuntime.reset(new CGOpenMPRuntime(*this));
-        break;
-      }
+      OpenMPRuntime.reset(new CGOpenMPRuntime(*this));
+      break;
+    }
   }
 }
 

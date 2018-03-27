@@ -17,6 +17,7 @@
 #include "CGDebugInfo.h"
 #include "CGObjCRuntime.h"
 #include "CGOpenMPRuntime.h"
+#include "CGOpenMPRuntimeSpark.h"
 #include "CGRecordLayout.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
@@ -2319,6 +2320,14 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
     // No other cases for now.
     } else {
       llvm_unreachable("DeclRefExpr for Decl not entered in LocalDeclMap?");
+    }
+
+    if (CGM.getLangOpts().OpenMPIsDevice && CGM.getTriple().isSparkEnvironment()) {
+      auto& Runtime = cast<CGOpenMPRuntimeSpark>(CGM.getOpenMPRuntime());
+      if (llvm::Value *Val = Runtime.getOpenMPKernelArgVar(VD)) {
+        llvm::errs() << "Access mapped variables\n";
+        return MakeAddrLValue(Val, T, getContext().getDeclAlign(VD));
+      }
     }
 
 

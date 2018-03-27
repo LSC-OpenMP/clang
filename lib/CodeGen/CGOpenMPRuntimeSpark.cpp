@@ -44,7 +44,24 @@ void CGOpenMPRuntimeSpark::emitTargetOutlinedFunction(
     unsigned CaptureLevel) {
   llvm::errs() << "CGOpenMPRuntimeSpark::emitTargetOutlinedFunction\n";
   assert(!ParentName.empty() && "Invalid target region parent name!");
-  CGOpenMPRuntime::emitTargetOutlinedFunction(D, ParentName, OutlinedFn, OutlinedFnID, IsOffloadEntry, CodeGen, CaptureLevel);
+
+  emitTargetOutlinedFunctionHelper(D, ParentName, OutlinedFn, OutlinedFnID,
+                                   IsOffloadEntry, CodeGen, 0);
+
+  OutlinedFn->setCallingConv(llvm::CallingConv::C);
+  OutlinedFn->addFnAttr(llvm::Attribute::NoUnwind);
+  OutlinedFn->removeFnAttr(llvm::Attribute::OptimizeNone);
+}
+
+llvm::Value *CGOpenMPRuntimeSpark::emitParallelOutlinedFunction(
+    const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
+    OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
+    unsigned CaptureLevel, unsigned ImplicitParamStop) {
+  DefineJNITypes();
+  GenerateMappingKernel(D);
+  EmitSparkJob();
+  return CGOpenMPRuntime::emitParallelOutlinedFunction(
+      D, ThreadIDVar, InnermostKind, CodeGen, CaptureLevel, ImplicitParamStop);
 }
 
 void CGOpenMPRuntimeSpark::EmitSparkJob() {
@@ -1323,9 +1340,9 @@ public:
                                          E = S->clauses().end();
          I != E; ++I)
       if (const OMPMapClause *C = static_cast<OMPMapClause *>(*I))
-        // VisitOMPMapClause(C); // FIXME: reactivate
+        ; // VisitOMPMapClause(C); // FIXME: reactivate
 
-        return true;
+    return true;
   }
 
   bool VisitVarDecl(VarDecl *VD) {
@@ -1604,14 +1621,20 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
 
     // Initialize a new CodeGenFunction used to generate the reduction
     CodeGenFunction CGF(CGM, true);
+
+    auto &Bld = CGF.Builder;
+
+    assert(!CGF.CurFn &&
+           "Do not use a CodeGenFunction object for more than one function");
+
     CGF.CurFn = RedFn;
     CGF.EnsureInsertPoint();
 
     // Generate useful type and constant
     llvm::PointerType *PointerTy_Int8 =
-        llvm::PointerType::get(CGF.Builder.getInt8Ty(), 0);
+        llvm::PointerType::get(Bld.getInt8Ty(), 0);
     llvm::PointerType *PointerTy_Int32 =
-        llvm::PointerType::get(CGF.Builder.getInt32Ty(), 0);
+        llvm::PointerType::get(Bld.getInt32Ty(), 0);
 
     llvm::ConstantInt *const_int32_0 = llvm::ConstantInt::get(
         CGM.getLLVMContext(), llvm::APInt(32, llvm::StringRef("0"), 10));
@@ -1623,79 +1646,77 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
     QualType VarType = VD->getType();
     int32_t SizeInByte = CGM.getContext().getTypeSize(VarType) / 8;
     llvm::ConstantInt *const_int32_typeSizeIntByte =
-        llvm::ConstantInt::get(CGF.Builder.getInt32Ty(), SizeInByte);
+        llvm::ConstantInt::get(Bld.getInt32Ty(), SizeInByte);
 
     // Allocate and load compulsry JNI arguments
     llvm::Function::arg_iterator args = RedFn->arg_begin();
     args->setName("env");
-    llvm::AllocaInst *alloca_env = CGF.Builder.CreateAlloca(PointerTy_1);
-    CGF.Builder.CreateAlignedStore(&*args, alloca_env, CGM.getPointerAlign());
+    llvm::AllocaInst *alloca_env = Bld.CreateAlloca(PointerTy_1);
+    Bld.CreateAlignedStore(&*args, alloca_env, CGM.getPointerAlign());
     args++;
     args->setName("obj");
-    llvm::AllocaInst *alloca_obj = CGF.Builder.CreateAlloca(PointerTy_jobject);
-    CGF.Builder.CreateAlignedStore(&*args, alloca_obj, CGM.getPointerAlign());
+    llvm::AllocaInst *alloca_obj = Bld.CreateAlloca(PointerTy_jobject);
+    Bld.CreateAlignedStore(&*args, alloca_obj, CGM.getPointerAlign());
     args++;
 
     // FIXME: check alignment
     llvm::LoadInst *ptr_env =
-        CGF.Builder.CreateAlignedLoad(alloca_env, CGM.getPointerAlign());
+        Bld.CreateAlignedLoad(alloca_env, CGM.getPointerAlign());
     llvm::LoadInst *ptr_ptr_env =
-        CGF.Builder.CreateAlignedLoad(ptr_env, CGM.getPointerAlign());
+        Bld.CreateAlignedLoad(ptr_env, CGM.getPointerAlign());
 
     llvm::Value *ptr_gep_getelement =
-        CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 184);
-    llvm::LoadInst *ptr_fn_getelement = CGF.Builder.CreateAlignedLoad(
-        ptr_gep_getelement, CGM.getPointerAlign());
+        Bld.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 184);
+    llvm::LoadInst *ptr_fn_getelement =
+        Bld.CreateAlignedLoad(ptr_gep_getelement, CGM.getPointerAlign());
 
     llvm::Value *ptr_gep_releaseelement =
-        CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 192);
-    llvm::LoadInst *ptr_fn_releaseelement = CGF.Builder.CreateAlignedLoad(
-        ptr_gep_releaseelement, CGM.getPointerAlign());
+        Bld.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 192);
+    llvm::LoadInst *ptr_fn_releaseelement =
+        Bld.CreateAlignedLoad(ptr_gep_releaseelement, CGM.getPointerAlign());
 
     llvm::Value *ptr_gep_newbytearray =
-        CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 176);
-    llvm::LoadInst *ptr_fn_newbytearray = CGF.Builder.CreateAlignedLoad(
-        ptr_gep_newbytearray, CGM.getPointerAlign());
+        Bld.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 176);
+    llvm::LoadInst *ptr_fn_newbytearray =
+        Bld.CreateAlignedLoad(ptr_gep_newbytearray, CGM.getPointerAlign());
 
     // Allocate, load and cast the first operand
-    llvm::AllocaInst *alloca_arg1 = CGF.Builder.CreateAlloca(PointerTy_jobject);
-    CGF.Builder.CreateAlignedStore(&*args, alloca_arg1, CGM.getPointerAlign());
+    llvm::AllocaInst *alloca_arg1 = Bld.CreateAlloca(PointerTy_jobject);
+    Bld.CreateAlignedStore(&*args, alloca_arg1, CGM.getPointerAlign());
 
     llvm::LoadInst *ptr_arg1 =
-        CGF.Builder.CreateAlignedLoad(alloca_arg1, CGM.getPointerAlign());
+        Bld.CreateAlignedLoad(alloca_arg1, CGM.getPointerAlign());
     std::vector<llvm::Value *> ptr_275_params;
     ptr_275_params.push_back(ptr_env);
     ptr_275_params.push_back(ptr_arg1);
     ptr_275_params.push_back(const_ptr_null);
-    llvm::CallInst *ptr_275 =
-        CGF.Builder.CreateCall(ptr_fn_getelement, ptr_275_params);
+    llvm::CallInst *ptr_275 = Bld.CreateCall(ptr_fn_getelement, ptr_275_params);
 
-    llvm::Value *ptr_265 = CGF.Builder.CreateBitCast(ptr_275, PointerTy_Int32);
+    llvm::Value *ptr_265 = Bld.CreateBitCast(ptr_275, PointerTy_Int32);
     llvm::Value *ptr_265_3 =
-        CGF.Builder.CreateAlignedLoad(ptr_265, CGM.getPointerAlign());
+        Bld.CreateAlignedLoad(ptr_265, CGM.getPointerAlign());
     llvm::Value *ptr_265_3_cast =
-        CGF.Builder.CreateBitCast(ptr_265_3, CGF.Builder.getInt32Ty());
+        Bld.CreateBitCast(ptr_265_3, Bld.getInt32Ty());
     args++;
 
     // Allocate, load and cast the second operand
-    llvm::AllocaInst *alloca_arg2 = CGF.Builder.CreateAlloca(PointerTy_jobject);
-    CGF.Builder.CreateAlignedStore(&*args, alloca_arg2, CGM.getPointerAlign());
+    llvm::AllocaInst *alloca_arg2 = Bld.CreateAlloca(PointerTy_jobject);
+    Bld.CreateAlignedStore(&*args, alloca_arg2, CGM.getPointerAlign());
 
     llvm::LoadInst *ptr_arg2 =
-        CGF.Builder.CreateAlignedLoad(alloca_arg2, CGM.getPointerAlign());
+        Bld.CreateAlignedLoad(alloca_arg2, CGM.getPointerAlign());
     std::vector<llvm::Value *> ptr_275_1_params;
     ptr_275_1_params.push_back(ptr_env);
     ptr_275_1_params.push_back(ptr_arg2);
     ptr_275_1_params.push_back(const_ptr_null);
     llvm::CallInst *ptr_275_1 =
-        CGF.Builder.CreateCall(ptr_fn_getelement, ptr_275_1_params);
+        Bld.CreateCall(ptr_fn_getelement, ptr_275_1_params);
 
-    llvm::Value *ptr_265_1 =
-        CGF.Builder.CreateBitCast(ptr_275_1, PointerTy_Int32);
+    llvm::Value *ptr_265_1 = Bld.CreateBitCast(ptr_275_1, PointerTy_Int32);
     llvm::Value *ptr_265_2 =
-        CGF.Builder.CreateAlignedLoad(ptr_265_1, CGM.getPointerAlign());
+        Bld.CreateAlignedLoad(ptr_265_1, CGM.getPointerAlign());
     llvm::Value *ptr_265_2_cast =
-        CGF.Builder.CreateBitCast(ptr_265_2, CGF.Builder.getInt32Ty());
+        Bld.CreateBitCast(ptr_265_2, Bld.getInt32Ty());
 
     // Compute the reduction
     llvm::Value *res = nullptr;
@@ -1704,29 +1725,29 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
     switch (C.getOperator()) {
     case OMPC_REDUCTION_or:
     case OMPC_REDUCTION_bitor: {
-      res = CGF.Builder.CreateOr(ptr_265_3_cast, ptr_265_2_cast);
+      res = Bld.CreateOr(ptr_265_3_cast, ptr_265_2_cast);
       break;
     }
     case OMPC_REDUCTION_bitxor: {
-      res = CGF.Builder.CreateXor(ptr_265_3_cast, ptr_265_2_cast);
+      res = Bld.CreateXor(ptr_265_3_cast, ptr_265_2_cast);
       break;
     }
     case OMPC_REDUCTION_sub: {
-      res = CGF.Builder.CreateSub(ptr_265_3_cast, ptr_265_2_cast);
+      res = Bld.CreateSub(ptr_265_3_cast, ptr_265_2_cast);
       break;
     }
     case OMPC_REDUCTION_add: {
-      res = CGF.Builder.CreateAdd(ptr_265_3_cast, ptr_265_2_cast, "", false,
+      res = Bld.CreateAdd(ptr_265_3_cast, ptr_265_2_cast, "", false,
                                   true);
       break;
     }
     case OMPC_REDUCTION_and:
     case OMPC_REDUCTION_bitand: {
-      res = CGF.Builder.CreateAnd(ptr_265_3_cast, ptr_265_2_cast);
+      res = Bld.CreateAnd(ptr_265_3_cast, ptr_265_2_cast);
       break;
     }
     case OMPC_REDUCTION_mult: {
-      res = CGF.Builder.CreateMul(ptr_265_3_cast, ptr_265_2_cast);
+      res = Bld.CreateMul(ptr_265_3_cast, ptr_265_2_cast);
       break;
     }
     case OMPC_REDUCTION_min: {
@@ -1746,9 +1767,8 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
 
     // Allocate and store the result
     // FIXME: what about other type
-    llvm::AllocaInst *alloca_res =
-        CGF.Builder.CreateAlloca(CGF.Builder.getInt32Ty());
-    CGF.Builder.CreateAlignedStore(res, alloca_res, CGM.getIntAlign());
+    llvm::AllocaInst *alloca_res = Bld.CreateAlloca(Bld.getInt32Ty());
+    Bld.CreateAlignedStore(res, alloca_res, CGM.getIntAlign());
 
     // Protect arg 1
 
@@ -1758,7 +1778,7 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
       void_272_params.push_back(ptr_arg1);
       void_272_params.push_back(ptr_275);
       void_272_params.push_back(const_int32_0);
-      CGF.Builder.CreateCall(ptr_fn_releaseelement, void_272_params);
+      Bld.CreateCall(ptr_fn_releaseelement, void_272_params);
     }
 
     // Protect arg 2
@@ -1769,7 +1789,7 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
       void_272_params.push_back(ptr_arg2);
       void_272_params.push_back(ptr_275_1);
       void_272_params.push_back(const_int32_0);
-      CGF.Builder.CreateCall(ptr_fn_releaseelement, void_272_params);
+      Bld.CreateCall(ptr_fn_releaseelement, void_272_params);
     }
 
     // Cast back the result to bit array
@@ -1777,23 +1797,23 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
     ptr_277_params.push_back(ptr_env);
     ptr_277_params.push_back(const_int32_typeSizeIntByte);
     llvm::CallInst *ptr_277 =
-        CGF.Builder.CreateCall(ptr_fn_newbytearray, ptr_277_params);
+        Bld.CreateCall(ptr_fn_newbytearray, ptr_277_params);
 
     llvm::Value *ptr_279 =
-        CGF.Builder.CreateConstInBoundsGEP2_32(nullptr, ptr_ptr_env, 0, 208);
+        Bld.CreateConstInBoundsGEP2_32(nullptr, ptr_ptr_env, 0, 208);
     llvm::LoadInst *ptr_280 =
-        CGF.Builder.CreateAlignedLoad(ptr_279, CGM.getPointerAlign());
+        Bld.CreateAlignedLoad(ptr_279, CGM.getPointerAlign());
     llvm::Value *ptr_res_cast =
-        CGF.Builder.CreateBitCast(alloca_res, PointerTy_Int8, "");
+        Bld.CreateBitCast(alloca_res, PointerTy_Int8, "");
     std::vector<llvm::Value *> void_281_params;
     void_281_params.push_back(ptr_env);
     void_281_params.push_back(ptr_277);
     void_281_params.push_back(const_int32_0);
     void_281_params.push_back(const_int32_typeSizeIntByte);
     void_281_params.push_back(ptr_res_cast);
-    CGF.Builder.CreateCall(ptr_280, void_281_params);
+    Bld.CreateCall(ptr_280, void_281_params);
 
-    CGF.Builder.CreateRet(ptr_277);
+    Bld.CreateRet(ptr_277);
   }
 }
 
@@ -1802,9 +1822,12 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
 
   llvm::errs() << "GenerateMappingKernel\n";
 
+  BuildJNITy();
+
   bool verbose = VERBOSE;
 
-  auto& DL = CGM.getDataLayout();
+  auto &DL = CGM.getDataLayout();
+  auto &Ctx = CGM.getContext();
 
   const OMPParallelForDirective &ForDirective =
       cast<OMPParallelForDirective>(S);
@@ -1821,7 +1844,8 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
   auto &indexMap = OffloadingMapVarsIndex;
 
   // FIXME: what about several functions
-  auto &info = *(SparkMappingFunctions.back());
+  OMPSparkMappingInfo info;
+  SparkMappingFunctions.push_back(&info);
 
   if (verbose)
     llvm::errs() << "Offloaded variables \n";
@@ -1880,82 +1904,68 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     Body = For->getBody();
   }
 
+  For->dump();
+
   // Create the mapping function
 
   // Initialize a new CodeGenFunction used to generate the mapping
-  CodeGenFunction CGF(CGM, true);
 
   // Detect input/output expression from the loop body
   FindKernelArguments Finder(CGM, *this, &info);
   Finder.Explore(LoopStmt);
 
-  // Get JNI type
-  llvm::StructType *StructTy_JNINativeInterface =
-      CGM.getModule().getTypeByName("struct.JNINativeInterface_");
-  llvm::PointerType *PointerTy_JNINativeInterface =
-      llvm::PointerType::get(StructTy_JNINativeInterface, 0);
-  llvm::PointerType *PointerTy_1 =
-      llvm::PointerType::get(PointerTy_JNINativeInterface, 0);
-
-  llvm::StructType *StructTy_jobject =
-      CGM.getModule().getTypeByName("struct._jobject");
-  llvm::PointerType *PointerTy_jobject =
-      llvm::PointerType::get(StructTy_jobject, 0);
-
-  llvm::IntegerType *IntTy_jlong = CGF.Builder.getInt64Ty();
-  llvm::IntegerType *IntTy_jint = CGF.Builder.getInt32Ty();
-
   // Initialize arguments
-  std::vector<llvm::Type *> FuncTy_args;
+  FunctionArgList ArgList;
 
   // Add compulsary arguments
-  FuncTy_args.push_back(PointerTy_1);
-  FuncTy_args.push_back(PointerTy_jobject);
+  // ImplicitParamDecl JNIEnvParam(Ctx, /*DC=*/nullptr, S.getLocStart(),
+  //                              &Ctx.Idents.get("JNIEnv"), JNIEnvQTy,
+  //                              ImplicitParamDecl::Other);
+  ArgList.push_back(
+      ImplicitParamDecl::Create(Ctx, JNIEnvQTy, ImplicitParamDecl::Other));
+  ArgList.push_back(
+      ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
 
   for (auto it = info.CounterInfo.begin(); it != info.CounterInfo.end(); ++it) {
-    FuncTy_args.push_back(IntTy_jlong);
-    FuncTy_args.push_back(IntTy_jlong);
+    ArgList.push_back(
+        ImplicitParamDecl::Create(Ctx, jlongQTy, ImplicitParamDecl::Other));
+    ArgList.push_back(
+        ImplicitParamDecl::Create(Ctx, jlongQTy, ImplicitParamDecl::Other));
   }
 
   for (auto it = info.InVarUse.begin(); it != info.InVarUse.end(); ++it) {
-    FuncTy_args.push_back(PointerTy_jobject);
+    ArgList.push_back(
+        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
   }
 
   for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end(); ++it) {
-    FuncTy_args.push_back(PointerTy_jobject);
+    ArgList.push_back(
+        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
   }
 
   for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it) {
-    FuncTy_args.push_back(PointerTy_jobject);
+    ArgList.push_back(
+        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
   }
 
-  llvm::FunctionType *FnTy = llvm::FunctionType::get(
-      /*Result=*/PointerTy_jobject,
-      /*Params=*/FuncTy_args,
-      /*isVarArg=*/false);
-
+  // FIXME: maybe output should be ptr to jobjectQTy
+  auto &FnInfo =
+      CGM.getTypes().arrangeBuiltinFunctionDeclaration(jobjectQTy, ArgList);
+  auto *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
   std::string FnName = "Java_org_llvm_openmp_OmpKernel_mappingMethod" +
                        std::to_string(info.Identifier);
+  auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
+                                    FnName, &CGM.getModule());
+  CGM.SetInternalFunctionAttributes(/*D=*/nullptr, Fn, FnInfo);
+  CodeGenFunction CGF(CGM);
+  CGF.disableDebugInfo();
+  CGF.StartFunction(GlobalDecl(), Ctx.VoidTy, Fn, FnInfo, ArgList);
 
-  llvm::Function *MapFn = llvm::Function::Create(
-      FnTy, llvm::GlobalValue::ExternalLinkage, FnName, &CGM.getModule());
+  auto &Bld = CGF.Builder;
 
-  CGF.CurFn = MapFn;
-
-  llvm::BasicBlock *EntryBB = CGF.createBasicBlock("entry", MapFn);
-
-  // Create a marker to make it easy to insert allocas into the entryblock
-  // later.  Don't create this with the builder, because we don't want it
-  // folded.
-  llvm::Value *Undef = llvm::UndefValue::get(CGF.Builder.getInt32Ty());
-  CGF.AllocaInsertPt = new llvm::BitCastInst(Undef, CGF.Builder.getInt32Ty(),
-                                             "allocapt", EntryBB);
-
-  CGF.Builder.SetInsertPoint(EntryBB);
-
-  // Generate useful type and constant
+  // Generate useful type and constant"
   llvm::PointerType *PointerTy_Int8 =
-      llvm::PointerType::get(CGF.Builder.getInt8Ty(), 0);
+      llvm::PointerType::get(Bld.getInt8Ty(), 0);
 
   llvm::ConstantInt *const_int32_0 = llvm::ConstantInt::get(
       CGM.getLLVMContext(), llvm::APInt(32, llvm::StringRef("0"), 10));
@@ -1967,85 +1977,40 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
 
   // Global variable
   llvm::Value *const_ptr_init =
-      CGF.Builder.CreateGlobalStringPtr("<init>", ".str.init");
+      Bld.CreateGlobalStringPtr("<init>", ".str.init");
   llvm::Value *const_ptr_tuple2 =
-      CGF.Builder.CreateGlobalStringPtr("scala/Tuple2", ".str.tuple2");
+      Bld.CreateGlobalStringPtr("scala/Tuple2", ".str.tuple2");
   llvm::Value *const_ptr_tuple3 =
-      CGF.Builder.CreateGlobalStringPtr("scala/Tuple3", ".str.tuple3");
-  llvm::Value *const_ptr_tuple2_args = CGF.Builder.CreateGlobalStringPtr(
+      Bld.CreateGlobalStringPtr("scala/Tuple3", ".str.tuple3");
+  llvm::Value *const_ptr_tuple2_args = Bld.CreateGlobalStringPtr(
       "(Ljava/lang/Object;Ljava/lang/Object;)V", ".str.tuple2.args");
-  llvm::Value *const_ptr_tuple3_args = CGF.Builder.CreateGlobalStringPtr(
+  llvm::Value *const_ptr_tuple3_args = Bld.CreateGlobalStringPtr(
       "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V",
       ".str.tuple3.args");
 
-  // Allocate and load compulsory JNI arguments
-  llvm::Function::arg_iterator args = MapFn->arg_begin();
-  args->setName("env");
-  llvm::AllocaInst *alloca_env = CGF.Builder.CreateAlloca(PointerTy_1);
-  CGF.Builder.CreateAlignedStore(&*args, alloca_env, CGM.getPointerAlign());
-  args++;
-  args->setName("obj");
-  llvm::AllocaInst *alloca_obj = CGF.Builder.CreateAlloca(PointerTy_jobject);
-  CGF.Builder.CreateAlignedStore(&*args, alloca_obj, CGM.getPointerAlign());
-  args++;
+  // Create the variables to save the slot, stack, frame and active threads.
+  auto ArgsIt = ArgList.begin();
+  auto EnvAddr =
+      CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                            (*ArgsIt)->getType()->getAs<PointerType>());
+  ++ArgsIt;
+  auto ObjAddr =
+      CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                            (*ArgsIt)->getType()->getAs<PointerType>());
+  ++ArgsIt;
 
-  llvm::LoadInst *ptr_env =
-      CGF.Builder.CreateAlignedLoad(alloca_env, CGM.getPointerAlign());
-  llvm::LoadInst *ptr_ptr_env =
-      CGF.Builder.CreateAlignedLoad(ptr_env, CGM.getPointerAlign());
+  auto *ptr_env = EnvAddr.getPointer();
 
-  // Load pointer to JNI functions
-  llvm::Value *ptr_gep_getelement =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 184);
-  llvm::LoadInst *ptr_fn_getelement =
-      CGF.Builder.CreateAlignedLoad(ptr_gep_getelement, CGM.getPointerAlign());
+  // Keep values that have to be used for releasing
+  llvm::SmallVector<std::pair<llvm::Value *, llvm::Value *>, 8> InputsToRelease,
+      ScalarInputsToRelease, InOutputsToRelease, OutputsToRelease;
+  // Keep values that have to be return
+  llvm::SmallVector<llvm::Value *, 8> OutputsToReturn;
 
-  llvm::Value *ptr_gep_getcritical =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 222);
-  llvm::LoadInst *ptr_fn_getcritical =
-      CGF.Builder.CreateAlignedLoad(ptr_gep_getcritical, CGM.getPointerAlign());
-
-  llvm::Value *ptr_gep_releaseelement =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 192);
-  llvm::LoadInst *ptr_fn_releaseelement = CGF.Builder.CreateAlignedLoad(
-      ptr_gep_releaseelement, CGM.getPointerAlign());
-
-  llvm::Value *ptr_gep_releasecritical =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 223);
-  llvm::LoadInst *ptr_fn_releasecritical = CGF.Builder.CreateAlignedLoad(
-      ptr_gep_releasecritical, CGM.getPointerAlign());
-
-  llvm::Value *ptr_gep_newbytearray =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 176);
-  llvm::LoadInst *ptr_fn_newbytearray = CGF.Builder.CreateAlignedLoad(
-      ptr_gep_newbytearray, CGM.getPointerAlign());
-
-  llvm::Value *ptr_gep_findclass =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 6);
-  llvm::LoadInst *ptr_fn_findclass =
-      CGF.Builder.CreateAlignedLoad(ptr_gep_findclass, CGM.getPointerAlign());
-
-  llvm::Value *ptr_gep_getmethodid =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 33);
-  llvm::LoadInst *ptr_fn_getmethodid =
-      CGF.Builder.CreateAlignedLoad(ptr_gep_getmethodid, CGM.getPointerAlign());
-
-  llvm::Value *ptr_gep_newobject =
-      CGF.Builder.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 28);
-  llvm::LoadInst *ptr_fn_newobject =
-      CGF.Builder.CreateAlignedLoad(ptr_gep_newobject, CGM.getPointerAlign());
-
-  // Keep values that have to be used for releasing.
-  llvm::SmallVector<std::pair<llvm::Value *, llvm::Value *>, 8> InputsToRelease;
-  llvm::SmallVector<std::pair<llvm::Value *, llvm::Value *>, 8>
-      ScalarInputsToRelease;
-  llvm::SmallVector<std::pair<llvm::Value *, llvm::Value *>, 8>
-      InOutputsToRelease;
-  llvm::SmallVector<std::pair<llvm::Value *, llvm::Value *>, 8>
-      OutputsToRelease;
-
-  llvm::Value *alloca_cnt;
-  llvm::Value *alloca_cnt_bound;
+  Address AddrCntArg = Address::invalid();
+  llvm::Value *CntVal;
+  Address AddrCntBoundArg = Address::invalid();
+  llvm::Value *CntBoundVal;
 
   if (info.CounterInfo.size() > 1) {
     llvm::errs() << "ERROR OmpCloud: Do not support more than 1 iteration "
@@ -2053,75 +2018,63 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     exit(EXIT_FAILURE);
   }
 
+  llvm::errs() << "GetCnt\n";
+
   for (auto it = info.CounterUse.begin(); it != info.CounterUse.end(); ++it) {
     const VarDecl *VD = it->first;
 
-    // FIXME: What about long ??
-    // Store current value of the loop counter
-    alloca_cnt = CGF.Builder.CreateAlloca(IntTy_jint);
-    llvm::Value *cast_cnt =
-        CGF.Builder.CreateTruncOrBitCast(&*args, IntTy_jint);
-    CGF.Builder.CreateAlignedStore(cast_cnt, alloca_cnt, CGM.getIntAlign());
+    // Get current value of the loop counter
+    // FIXME: Should we cast ??
+    AddrCntArg = CGF.GetAddrOfLocalVar(*ArgsIt);
+    CntVal = CGF.EmitLoadOfScalar(AddrCntArg, /*Volatile=*/false, Ctx.IntTy,
+                                  SourceLocation());
+    ArgsIt++;
 
-    args++;
+    // Get current value of the loop bound
+    // FIXME: Should we cast ??
+    AddrCntBoundArg = CGF.GetAddrOfLocalVar(*ArgsIt);
+    CntBoundVal = CGF.EmitLoadOfScalar(AddrCntBoundArg, /*Volatile=*/false,
+                                       Ctx.IntTy, SourceLocation());
 
-    // Store the bound of the inner tiled loop according to the current
-    // iteration
-    alloca_cnt_bound = CGF.Builder.CreateAlloca(IntTy_jint);
-    llvm::Value *cast_cnt_bound =
-        CGF.Builder.CreateTruncOrBitCast(&*args, IntTy_jint);
-    CGF.Builder.CreateAlignedStore(cast_cnt_bound, alloca_cnt_bound,
-                                   CGM.getIntAlign());
-
-    args++;
-
-    addOpenMPKernelArgVar(VD, alloca_cnt);
+    addOpenMPKernelArgVar(VD, CntVal);
+    ArgsIt++;
   }
+
+  llvm::errs() << "GetJObjectFromInput\n";
 
   // Allocate, load and cast input variables (i.e. the arguments)
   for (auto it = info.InVarUse.begin(); it != info.InVarUse.end(); ++it) {
     const VarDecl *VD = it->first;
-    args->setName(VD->getName());
-
     QualType varType = VD->getType();
+    llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(varType);
+
+    Address JObjectAddr =
+        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                              (*ArgsIt)->getType()->getAs<PointerType>());
+    llvm::Value *JObjectPtr = JObjectAddr.getPointer();
+
     llvm::Value *valuePtr;
 
     if (!varType->isAnyPointerType()) {
-      // GetByteArrayElements
-      std::vector<llvm::Value *> ptr_load_arg_params;
-      ptr_load_arg_params.push_back(ptr_env);
-      ptr_load_arg_params.push_back(&*args);
-      ptr_load_arg_params.push_back(const_ptr_null);
-      llvm::CallInst *ptr_load_arg =
-          CGF.Builder.CreateCall(ptr_fn_getelement, ptr_load_arg_params);
+      llvm::Value *ptr_load_arg =
+          EmitJNIGetByteArrayElements(CGF, JObjectPtr, const_ptr_null);
 
-      ScalarInputsToRelease.push_back(std::make_pair(&*args, ptr_load_arg));
-
-      llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(varType);
-
-      llvm::PointerType *PointerTy_arg =
-          llvm::PointerType::get(TyObject_arg, 0);
-      valuePtr = CGF.Builder.CreateBitCast(ptr_load_arg, PointerTy_arg);
+      ScalarInputsToRelease.push_back(std::make_pair(JObjectPtr, ptr_load_arg));
+      valuePtr = Bld.CreateBitCast(ptr_load_arg, TyObject_arg->getPointerTo());
 
     } else {
-      // GetPrimitiveArrayCritical
-      std::vector<llvm::Value *> ptr_load_arg_params;
-      ptr_load_arg_params.push_back(ptr_env);
-      ptr_load_arg_params.push_back(&*args);
-      ptr_load_arg_params.push_back(const_ptr_null);
-      llvm::CallInst *ptr_load_arg =
-          CGF.Builder.CreateCall(ptr_fn_getcritical, ptr_load_arg_params);
+      JObjectPtr->dump();
+      llvm::Value *ptr_load_arg = EmitJNIGetPrimitiveArrayCritical(
+          CGF, JObjectPtr,
+          llvm::ConstantPointerNull::get(jbooleanTy->getPointerTo()));
 
-      InputsToRelease.push_back(std::make_pair(&*args, ptr_load_arg));
-
-      llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(varType);
+      InputsToRelease.push_back(std::make_pair(JObjectPtr, ptr_load_arg));
 
       llvm::Value *ptr_casted_arg =
-          CGF.Builder.CreateBitCast(ptr_load_arg, TyObject_arg);
+          Bld.CreateBitCast(ptr_load_arg, TyObject_arg);
 
-      valuePtr = CGF.Builder.CreateAlloca(TyObject_arg);
-      CGF.Builder.CreateAlignedStore(ptr_casted_arg, valuePtr,
-                                     CGM.getPointerAlign());
+      valuePtr = Bld.CreateAlloca(TyObject_arg);
+      Bld.CreateAlignedStore(ptr_casted_arg, valuePtr, CGM.getPointerAlign());
 
       if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
         llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
@@ -2132,45 +2085,44 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     }
 
     addOpenMPKernelArgVar(VD, valuePtr);
-
-    args++;
+    ++ArgsIt;
   }
+
+  llvm::errs() << "GetJObjectFromInputOutput\n";
 
   // Allocate, load and cast input/output variables (i.e. the arguments)
   for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end(); ++it) {
     const VarDecl *VD = it->first;
 
-    // GetPrimitiveArrayCritical
-    std::vector<llvm::Value *> ptr_load_arg_params;
-    ptr_load_arg_params.push_back(ptr_env);
-    ptr_load_arg_params.push_back(&*args);
-    ptr_load_arg_params.push_back(const_ptr_null);
-    llvm::CallInst *ptr_load_arg =
-        CGF.Builder.CreateCall(ptr_fn_getcritical, ptr_load_arg_params);
+    Address JObjectAddr =
+        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                              (*ArgsIt)->getType()->getAs<PointerType>());
+    llvm::Value *JObjectPtr = JObjectAddr.getPointer();
+    llvm::Value *ArrayPtr = EmitJNIGetPrimitiveArrayCritical(
+        CGF, JObjectPtr,
+        llvm::ConstantPointerNull::get(jbooleanTy->getPointerTo()));
 
-    args->setName(VD->getName());
-
-    InOutputsToRelease.push_back(std::make_pair(&*args, ptr_load_arg));
+    InOutputsToRelease.push_back(std::make_pair(JObjectPtr, ArrayPtr));
+    OutputsToReturn.push_back(JObjectPtr);
 
     QualType varType = VD->getType();
     llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(varType);
 
-    llvm::Value *valuePtr;
+    llvm::Value *ValPtr;
 
     if (!varType->isAnyPointerType()) {
       if (verbose)
         llvm::errs() << ">Test< " << VD->getName() << " is scalar\n";
 
-      valuePtr = CGF.Builder.CreateBitCast(
-          ptr_load_arg, llvm::PointerType::get(TyObject_arg, 0));
+      ValPtr = Bld.CreateBitCast(ArrayPtr, TyObject_arg->getPointerTo());
 
     } else {
-      llvm::Value *ptr_casted_arg =
-          CGF.Builder.CreateBitCast(ptr_load_arg, TyObject_arg);
+      llvm::Value *CastArrayPtr = Bld.CreateBitCast(ArrayPtr, TyObject_arg);
 
-      valuePtr = CGF.Builder.CreateAlloca(TyObject_arg);
+      ValPtr = Bld.CreateAlloca(TyObject_arg);
 
-      CGF.Builder.CreateAlignedStore(ptr_casted_arg, valuePtr, DL.getPrefTypeAlignment(TyObject_arg));
+      Bld.CreateAlignedStore(CastArrayPtr, ValPtr,
+                             DL.getPrefTypeAlignment(TyObject_arg));
 
       if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
         llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
@@ -2180,46 +2132,43 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
       }
     }
 
-    addOpenMPKernelArgVar(VD, valuePtr);
-
-    args++;
+    addOpenMPKernelArgVar(VD, ValPtr);
+    ++ArgsIt;
   }
+
+  llvm::errs() << "GetJObjectFromOutput\n";
 
   // Allocate output variables
   for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it) {
     const VarDecl *VD = it->first;
 
-    // GetPrimitiveArrayCritical
-    std::vector<llvm::Value *> ptr_load_arg_params;
-    ptr_load_arg_params.push_back(ptr_env);
-    ptr_load_arg_params.push_back(&*args);
-    ptr_load_arg_params.push_back(const_ptr_null);
-    llvm::CallInst *ptr_load_arg =
-        CGF.Builder.CreateCall(ptr_fn_getcritical, ptr_load_arg_params);
+    Address JObjectAddr =
+        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                              (*ArgsIt)->getType()->getAs<PointerType>());
+    llvm::Value *JObjectPtr = JObjectAddr.getPointer();
+    llvm::Value *ArrayPtr =
+        EmitJNIGetPrimitiveArrayCritical(CGF, JObjectPtr, const_ptr_null);
 
-    args->setName(VD->getName());
-
-    OutputsToRelease.push_back(std::make_pair(&*args, ptr_load_arg));
+    OutputsToRelease.push_back(std::make_pair(JObjectPtr, ArrayPtr));
+    OutputsToReturn.push_back(JObjectPtr);
 
     QualType varType = VD->getType();
     llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(varType);
 
-    llvm::Value *valuePtr;
+    llvm::Value *ValPtr;
 
     if (!varType->isAnyPointerType()) {
       if (verbose)
         llvm::errs() << ">Test< " << VD->getName() << " is scalar\n";
 
-      llvm::PointerType *PointerTy_arg =
-          llvm::PointerType::get(TyObject_arg, 0);
-      valuePtr = CGF.Builder.CreateBitCast(ptr_load_arg, PointerTy_arg);
+      ValPtr = Bld.CreateBitCast(ArrayPtr, TyObject_arg->getPointerTo());
 
     } else {
-      llvm::Value *ptr_casted_arg =
-          CGF.Builder.CreateBitCast(ptr_load_arg, TyObject_arg);
+      llvm::Value *CastArrayPtr = Bld.CreateBitCast(ArrayPtr, TyObject_arg);
 
-      valuePtr = CGF.Builder.CreateAlloca(TyObject_arg);
-      CGF.Builder.CreateAlignedStore(ptr_casted_arg, valuePtr, DL.getPrefTypeAlignment(TyObject_arg));
+      ValPtr = Bld.CreateAlloca(TyObject_arg);
+      Bld.CreateAlignedStore(CastArrayPtr, ValPtr,
+                             DL.getPrefTypeAlignment(TyObject_arg));
 
       if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
         llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
@@ -2229,17 +2178,15 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
       }
     }
 
-    addOpenMPKernelArgVar(VD, valuePtr);
-
-    args++;
+    addOpenMPKernelArgVar(VD, ValPtr);
+    ++ArgsIt;
   }
 
-
-  //JumpDest LoopExit = CGF.getJumpDestInCurrentScope("for.end");
+  // JumpDest LoopExit = CGF.getJumpDestInCurrentScope("for.end");
 
   // Evaluate the first part before the loop.
   if (For->getInit())
-  CGF.EmitStmt(For->getInit());
+    CGF.EmitStmt(For->getInit());
 
   // Start the loop with a block that tests the condition.
   // If there's an increment, the continue scope will be overwritten
@@ -2268,11 +2215,13 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     // C99 6.8.5p2/p4: The first substatement is executed if the expression
     // compares unequal to 0.  The condition must be a scalar type.
 
-    llvm::Value *Cond = CGF.Builder.CreateICmpULE(
-        CGF.Builder.CreateAlignedLoad(alloca_cnt, CGM.getIntAlign()),
-        CGF.Builder.CreateAlignedLoad(alloca_cnt_bound, CGM.getIntAlign()));
+    llvm::Value *Cond = Bld.CreateICmpULE(
+        CGF.EmitLoadOfScalar(AddrCntArg, /*Volatile=*/false, Ctx.IntTy,
+                             SourceLocation()),
+        CGF.EmitLoadOfScalar(AddrCntBoundArg, /*Volatile=*/false, Ctx.IntTy,
+                             SourceLocation()));
 
-    CGF.Builder.CreateCondBr(Cond, ForBody, ExitBlock);
+    Bld.CreateCondBr(Cond, ForBody, ExitBlock);
 
     CGF.EmitBlock(ExitBlock);
 
@@ -2285,7 +2234,9 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     // a compound statement.
 
     // Generate kernel code
+    llvm::errs() << "Start emitting Loop body\n";
     CGF.EmitStmt(Body);
+    llvm::errs() << "End of Loop body\n";
 
     // FIXME: CGM.OpenMPSupport.stopSparkRegion();
   }
@@ -2301,115 +2252,31 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
   // Emit the fall-through block.
   CGF.EmitBlock(ExitBlock, true);
 
-  for (auto it = InputsToRelease.begin(); it != InputsToRelease.end(); ++it) {
-    // ReleaseCritical
-    std::vector<llvm::Value *> params_release;
-    params_release.push_back(ptr_env);
-    params_release.push_back(it->first);
-    params_release.push_back(it->second);
-    params_release.push_back(const_int32_2);
-    CGF.Builder.CreateCall(ptr_fn_releasecritical, params_release);
-  }
-
+  // Release JNI arrays
+  for (auto it = InputsToRelease.begin(); it != InputsToRelease.end(); ++it)
+    EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
+                                         const_int32_2);
   for (auto it = ScalarInputsToRelease.begin();
-       it != ScalarInputsToRelease.end(); ++it) {
-    // ReleaseByteArrayElements
-    std::vector<llvm::Value *> params_release;
-    params_release.push_back(ptr_env);
-    params_release.push_back(it->first);
-    params_release.push_back(it->second);
-    params_release.push_back(const_int32_2);
-    CGF.Builder.CreateCall(ptr_fn_releaseelement, params_release);
-  }
-
-  llvm::SmallVector<llvm::Value *, 8> OutputsToReturn;
-
-  for (auto it = OutputsToRelease.begin(); it != OutputsToRelease.end(); ++it) {
-    // ReleaseByteArrayElements
-    std::vector<llvm::Value *> params_release;
-    params_release.push_back(ptr_env);
-    params_release.push_back(it->first);
-    params_release.push_back(it->second);
-    params_release.push_back(const_int32_0);
-    CGF.Builder.CreateCall(ptr_fn_releasecritical, params_release);
-
-    OutputsToReturn.push_back(it->first);
-  }
-
+       it != ScalarInputsToRelease.end(); ++it)
+    EmitJNIReleaseByteArrayElements(CGF, it->first, it->second, const_int32_2);
+  for (auto it = OutputsToRelease.begin(); it != OutputsToRelease.end(); ++it)
+    EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
+                                         const_int32_0);
   for (auto it = InOutputsToRelease.begin(); it != InOutputsToRelease.end();
-       ++it) {
-    // ReleaseCritical
-    std::vector<llvm::Value *> params_release;
-    params_release.push_back(ptr_env);
-    params_release.push_back(it->first);
-    params_release.push_back(it->second);
-    params_release.push_back(const_int32_0);
-    CGF.Builder.CreateCall(ptr_fn_releasecritical, params_release);
+       ++it)
+    EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
+                                         const_int32_0);
 
-    OutputsToReturn.push_back(it->first);
-  }
-
-  unsigned NbOutputs = info.OutVarDef.size() + info.InOutVarUse.size();
+  int NbOutputs = info.OutVarDef.size() + info.InOutVarUse.size();
 
   if (NbOutputs == 1) {
-    // Just return the value
-    CGF.Builder.CreateRet(OutputsToReturn.front());
-  } else if (NbOutputs == 2) {
-    // Construct and return a Tuple2
-    std::vector<llvm::Value *> params_findclass;
-    params_findclass.push_back(ptr_env);
-    params_findclass.push_back(const_ptr_tuple2);
-    llvm::CallInst *ptr_class_tuple2 =
-        CGF.Builder.CreateCall(ptr_fn_findclass, params_findclass);
-
-    std::vector<llvm::Value *> params_getmethodid;
-    params_getmethodid.push_back(ptr_env);
-    params_getmethodid.push_back(ptr_class_tuple2);
-    params_getmethodid.push_back(const_ptr_init);
-    params_getmethodid.push_back(const_ptr_tuple2_args);
-    llvm::CallInst *ptr_new_tuple2 =
-        CGF.Builder.CreateCall(ptr_fn_getmethodid, params_getmethodid);
-
-    std::vector<llvm::Value *> params_newobject;
-    params_newobject.push_back(ptr_env);
-    params_newobject.push_back(ptr_class_tuple2);
-    params_newobject.push_back(ptr_new_tuple2);
-    params_newobject.push_back(OutputsToReturn[0]);
-    params_newobject.push_back(OutputsToReturn[1]);
-    llvm::CallInst *ptr_tuple2 =
-        CGF.Builder.CreateCall(ptr_fn_newobject, params_newobject);
-
-    CGF.Builder.CreateRet(ptr_tuple2);
-  } else if (NbOutputs == 3) {
-    // Construct and return a Tuple3
-    std::vector<llvm::Value *> params_findclass;
-    params_findclass.push_back(ptr_env);
-    params_findclass.push_back(const_ptr_tuple3);
-    llvm::CallInst *ptr_class_tuple3 =
-        CGF.Builder.CreateCall(ptr_fn_findclass, params_findclass);
-
-    std::vector<llvm::Value *> params_getmethodid;
-    params_getmethodid.push_back(ptr_env);
-    params_getmethodid.push_back(ptr_class_tuple3);
-    params_getmethodid.push_back(const_ptr_init);
-    params_getmethodid.push_back(const_ptr_tuple3_args);
-    llvm::CallInst *ptr_new_tuple3 =
-        CGF.Builder.CreateCall(ptr_fn_getmethodid, params_getmethodid);
-
-    std::vector<llvm::Value *> params_newobject;
-    params_newobject.push_back(ptr_env);
-    params_newobject.push_back(ptr_class_tuple3);
-    params_newobject.push_back(ptr_new_tuple3);
-    params_newobject.push_back(OutputsToReturn[0]);
-    params_newobject.push_back(OutputsToReturn[1]);
-    params_newobject.push_back(OutputsToReturn[2]);
-    llvm::CallInst *ptr_tuple3 =
-        CGF.Builder.CreateCall(ptr_fn_newobject, params_newobject);
-
-    CGF.Builder.CreateRet(ptr_tuple3);
+    // Just return the ByteArray
+    Bld.CreateRet(OutputsToReturn.front());
+  } else if (NbOutputs > 1) {
+    EmitJNICreateNewTuple(CGF, OutputsToReturn);
   } else {
-    // TODO: Construct and return Tuples in generic way
-    llvm::errs() << "ERROR OmpCloud: Need support for more than 3 outputs\n";
-    exit(EXIT_FAILURE);
+    llvm::errs() << "WARNING OmpCloud: There is not output variable\n";
   }
+
+  CGF.FinishFunction();
 }
