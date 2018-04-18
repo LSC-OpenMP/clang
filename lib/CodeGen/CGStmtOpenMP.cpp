@@ -72,7 +72,7 @@ public:
                                 (CGF.CapturedStmtInfo &&
                                  InlinedShareds.isGlobalVarCaptured(VD)),
                             VD->getType().getNonReferenceType(), VK_LValue,
-                            SourceLocation());
+                            C.getLocation());
             InlinedShareds.addPrivate(VD, [&CGF, &DRE]() -> Address {
               return CGF.EmitLValue(&DRE).getAddress();
             });
@@ -88,6 +88,14 @@ public:
 /// of used expression from loop statement.
 class OMPLoopScope : public CodeGenFunction::RunCleanupsScope {
   void emitPreInitStmt(CodeGenFunction &CGF, const OMPLoopDirective &S) {
+    CodeGenFunction::OMPPrivateScope PreCondScope(CGF);
+    for (auto *E : S.counters()) {
+      const auto *VD = cast<VarDecl>(cast<DeclRefExpr>(E)->getDecl());
+      (void)PreCondScope.addPrivate(VD, [&CGF, VD]() {
+        return CGF.CreateMemTemp(VD->getType().getNonReferenceType());
+      });
+    }
+    (void)PreCondScope.Privatize();
     if (auto *LD = dyn_cast<OMPLoopDirective>(&S)) {
       if (auto *PreInits = cast_or_null<DeclStmt>(LD->getPreInits())) {
         for (const auto *I : PreInits->decls())
@@ -97,9 +105,11 @@ class OMPLoopScope : public CodeGenFunction::RunCleanupsScope {
   }
 
 public:
-  OMPLoopScope(CodeGenFunction &CGF, const OMPLoopDirective &S)
+  OMPLoopScope(CodeGenFunction &CGF, const OMPLoopDirective &S,
+               bool EmitPreInit)
       : CodeGenFunction::RunCleanupsScope(CGF) {
-    emitPreInitStmt(CGF, S);
+    if (EmitPreInit)
+      emitPreInitStmt(CGF, S);
   }
 };
 
@@ -248,8 +258,7 @@ void CodeGenFunction::GenerateOpenMPCapturedVars(
     } else if (CurCap->capturesThis())
       CapturedVars.push_back(CXXThisValue);
     else if (CurCap->capturesVariableByCopy()) {
-      llvm::Value *CV =
-          EmitLoadOfLValue(EmitLValue(*I), SourceLocation()).getScalarVal();
+      llvm::Value *CV = EmitLoadOfScalar(EmitLValue(*I), CurCap->getLocation());
 
       // If the field is not a pointer, we need to save the actual value
       // and load it as a void pointer.
@@ -262,7 +271,7 @@ void CodeGenFunction::GenerateOpenMPCapturedVars(
 
         auto *SrcAddrVal = EmitScalarConversion(
             DstAddr.getPointer(), Ctx.getPointerType(Ctx.getUIntPtrType()),
-            Ctx.getPointerType(CurField->getType()), SourceLocation());
+            Ctx.getPointerType(CurField->getType()), CurCap->getLocation());
         LValue SrcLV =
             MakeNaturalAlignAddrLValue(SrcAddrVal, CurField->getType());
 
@@ -270,7 +279,7 @@ void CodeGenFunction::GenerateOpenMPCapturedVars(
         EmitStoreThroughLValue(RValue::get(CV), SrcLV);
 
         // Load the value using the destination type pointer.
-        CV = EmitLoadOfLValue(DstLV, SourceLocation()).getScalarVal();
+        CV = EmitLoadOfScalar(DstLV, CurCap->getLocation());
       }
       CapturedVars.push_back(CV);
     } else {
@@ -282,12 +291,13 @@ void CodeGenFunction::GenerateOpenMPCapturedVars(
 
 static Address castValueFromUintptr(CodeGenFunction &CGF, QualType DstType,
                                     StringRef Name, LValue AddrLV,
+                                    SourceLocation Loc,
                                     bool isReferenceType = false) {
   ASTContext &Ctx = CGF.getContext();
 
-  auto *CastedPtr = CGF.EmitScalarConversion(
-      AddrLV.getAddress().getPointer(), Ctx.getUIntPtrType(),
-      Ctx.getPointerType(DstType), SourceLocation());
+  auto *CastedPtr = CGF.EmitScalarConversion(AddrLV.getAddress().getPointer(),
+                                             Ctx.getUIntPtrType(),
+                                             Ctx.getPointerType(DstType), Loc);
   auto TmpAddr =
       CGF.MakeNaturalAlignAddrLValue(CastedPtr, Ctx.getPointerType(DstType))
           .getAddress();
@@ -458,13 +468,12 @@ static llvm::Function *emitOutlinedFunctionPrologue(
                                         AlignmentSource::Decl);
     if (FD->hasCapturedVLAType()) {
       if (FO.UIntPtrCastRequired) {
-        ArgLVal = CGF.MakeAddrLValue(castValueFromUintptr(CGF, FD->getType(),
-                                                          Args[Cnt]->getName(),
-                                                          ArgLVal),
-                                     FD->getType(), AlignmentSource::Decl);
+        ArgLVal = CGF.MakeAddrLValue(
+            castValueFromUintptr(CGF, FD->getType(), Args[Cnt]->getName(),
+                                 ArgLVal, I->getLocation()),
+            FD->getType(), AlignmentSource::Decl);
       }
-      auto *ExprArg =
-          CGF.EmitLoadOfLValue(ArgLVal, SourceLocation()).getScalarVal();
+      auto *ExprArg = CGF.EmitLoadOfScalar(ArgLVal, I->getLocation());
       auto VAT = FD->getCapturedVLAType();
       VLASizes.insert({Args[Cnt], {VAT->getSizeExpr(), ExprArg}});
     } else if (I->capturesVariable()) {
@@ -493,16 +502,15 @@ static llvm::Function *emitOutlinedFunctionPrologue(
       QualType VarTy = Var->getType();
       LocalAddrs.insert(
           {Args[Cnt],
-           {Var,
-            FO.UIntPtrCastRequired
-                ? castValueFromUintptr(CGF, FD->getType(), Args[Cnt]->getName(),
-                                       ArgLVal, VarTy->isReferenceType())
-                : ArgLVal.getAddress()}});
+           {Var, FO.UIntPtrCastRequired
+                     ? castValueFromUintptr(
+                           CGF, FD->getType(), Args[Cnt]->getName(), ArgLVal,
+                           I->getLocation(), VarTy->isReferenceType())
+                     : ArgLVal.getAddress()}});
     } else {
       // If 'this' is captured, load it into CXXThisValue.
       assert(I->capturesThis());
-      CXXThisValue = CGF.EmitLoadOfLValue(ArgLVal, Args[Cnt]->getLocation())
-                         .getScalarVal();
+      CXXThisValue = CGF.EmitLoadOfScalar(ArgLVal, Args[Cnt]->getLocation());
       LocalAddrs.insert({Args[Cnt], {nullptr, ArgLVal.getAddress()}});
     }
     ++Cnt;
@@ -571,7 +579,7 @@ llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
           I->second.second,
           I->second.first ? I->second.first->getType() : Arg->getType(),
           AlignmentSource::Decl);
-      CallArg = WrapperCGF.EmitLoadOfScalar(LV, SourceLocation());
+      CallArg = WrapperCGF.EmitLoadOfScalar(LV, S.getLocStart());
     } else {
       auto EI = VLASizes.find(Arg);
       if (EI != VLASizes.end())
@@ -580,7 +588,7 @@ llvm::Function *CodeGenFunction::GenerateOpenMPCapturedStmtFunction(
         LValue LV =
             WrapperCGF.MakeAddrLValue(WrapperCGF.GetAddrOfLocalVar(Arg),
                                       Arg->getType(), AlignmentSource::Decl);
-        CallArg = WrapperCGF.EmitLoadOfScalar(LV, SourceLocation());
+        CallArg = WrapperCGF.EmitLoadOfScalar(LV, S.getLocStart());
       }
     }
     CallArgs.emplace_back(WrapperCGF.EmitFromMemory(CallArg, Arg->getType()));
@@ -606,6 +614,16 @@ void CodeGenFunction::GenerateOpenMPCapturedStmtParameters(
   if (!UseCapturedArgumentsOnly) {
     Args.append(CD->param_begin(),
                 std::next(CD->param_begin(), ImplicitParamStop));
+  }
+  FunctionDecl *DebugFunctionDecl = nullptr;
+  if (!UIntPtrCastRequired) {
+    FunctionProtoType::ExtProtoInfo EPI;
+    DebugFunctionDecl = FunctionDecl::Create(
+        Ctx, Ctx.getTranslationUnitDecl(), S.getLocStart(), SourceLocation(),
+        DeclarationName(), Ctx.VoidTy,
+        Ctx.getTrivialTypeSourceInfo(
+            Ctx.getFunctionType(Ctx.VoidTy, llvm::None, EPI)),
+        SC_Static, /*isInlineSpecified=*/false, /*hasWrittenPrototype=*/false);
   }
   auto I = S.captures().begin();
   for (auto *FD : RD->fields()) {
@@ -650,9 +668,17 @@ void CodeGenFunction::GenerateOpenMPCapturedStmtParameters(
     if (NonAliasedMaps &&
         (ArgType->isAnyPointerType() || ArgType->isReferenceType()))
       ArgType = ArgType.withRestrict();
-    auto *Arg =
-        ImplicitParamDecl::Create(Ctx, /*DC=*/nullptr, FD->getLocation(), II,
-                                  ArgType, ImplicitParamDecl::Other);
+    VarDecl *Arg;
+    if (DebugFunctionDecl && (CapVar || I->capturesThis())) {
+      Arg = ParmVarDecl::Create(
+          Ctx, DebugFunctionDecl,
+          CapVar ? CapVar->getLocStart() : FD->getLocStart(),
+          CapVar ? CapVar->getLocation() : FD->getLocation(), II, ArgType,
+          /*TInfo=*/nullptr, SC_None, /*DefArg=*/nullptr);
+    } else {
+      Arg = ImplicitParamDecl::Create(Ctx, /*DC=*/nullptr, FD->getLocation(),
+                                      II, ArgType, ImplicitParamDecl::Other);
+    }
     Args.emplace_back(Arg);
     ++I;
   }
@@ -1833,8 +1859,8 @@ void CodeGenFunction::EmitOMPSimdLoop(const OMPLoopDirective &S,
   auto &&CodeGen = [&S, OutlinedSimd](CodeGenFunction &CGF, PrePostActionTy &) {
     // Do not emit this code if it was already emitted before
     // in the same scope.
-    if (!requiresAdditionalIterationVar(S.getDirectiveKind()))
-      OMPLoopScope PreInitScope(CGF, S);
+    OMPLoopScope PreInitScope(
+        CGF, S, !requiresAdditionalIterationVar(S.getDirectiveKind()));
     // if (PreCond) {
     //   for (IV in 0..LastIteration) BODY;
     //   <Final counter/linear vars updates>;
@@ -2018,16 +2044,15 @@ void CodeGenFunction::EmitOMPOuterLoop(
       QualType IteratorTy = IVExpr->getType();
 
       // Get the values of the current upper and power bounds.
-      llvm::Value *LBVal = EmitLoadOfScalar(LB, /*Volatile=*/false, IteratorTy,
-                                            SourceLocation());
-      llvm::Value *UBVal = EmitLoadOfScalar(UB, /*Volatile=*/false, IteratorTy,
-                                            SourceLocation());
+      llvm::Value *LBVal =
+          EmitLoadOfScalar(LB, /*Volatile=*/false, IteratorTy, S.getLocStart());
+      llvm::Value *UBVal =
+          EmitLoadOfScalar(UB, /*Volatile=*/false, IteratorTy, S.getLocStart());
 
       // Get the values of the previous lower bound and make sure it is casted
       // to the same type as the loop iterator variable.
       auto PrevLB = EmitLValue(S.getPrevLowerBoundVariable());
-      llvm::Value *PrevLBVal =
-          EmitLoadOfLValue(PrevLB, SourceLocation()).getScalarVal();
+      llvm::Value *PrevLBVal = EmitLoadOfScalar(PrevLB, S.getLocStart());
       PrevLBVal = Builder.CreateIntCast(PrevLBVal, Builder.getIntNTy(IVSize),
                                         /*IsSigned=*/false);
       EmitStoreOfScalar(Builder.CreateAdd(LBVal, PrevLBVal), LB,
@@ -2211,19 +2236,18 @@ void CodeGenFunction::EmitOMPForOuterLoop(
       if (CGM.getLangOpts().OpenMPIsDevice && CGM.getTriple().isNVPTX()) {
         // normalize loop
         auto PrevLB = EmitLValue(S.getPrevLowerBoundVariable());
-        llvm::Value *PrevLBVal =
-            EmitLoadOfLValue(PrevLB, SourceLocation()).getScalarVal();
+        llvm::Value *PrevLBVal = EmitLoadOfScalar(PrevLB, S.getLocStart());
         PrevLBVal = Builder.CreateIntCast(PrevLBVal, Builder.getIntNTy(IVSize),
                                           /*isSigned=*/false);
         LBVal = Builder.getIntN(IVSize, 0);
         UBVal = EmitLoadOfScalar(UB, /*Volatile=*/false, IteratorTy,
-                                 SourceLocation());
+                                 S.getLocStart());
         UBVal = Builder.CreateSub(UBVal, PrevLBVal);
       } else {
         LBVal = EmitLoadOfScalar(LB, /*Volatile=*/false, IteratorTy,
-                                 SourceLocation());
+                                 S.getLocStart());
         UBVal = EmitLoadOfScalar(UB, /*Volatile=*/false, IteratorTy,
-                                 SourceLocation());
+                                 S.getLocStart());
       }
     } else {
       LBVal = Builder.getIntN(IVSize, 0);
@@ -2414,6 +2438,8 @@ void CodeGenFunction::EmitOMPTeamsDistributeParallelForDirective(
     auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
       auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
         auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
+          OMPCancelStackRAII CancelRegion(
+              CGF, OMPD_teams_distribute_parallel_for, S.hasCancel());
           CGF.EmitOMPWorksharingLoop(S);
         };
         emitCommonOMPParallelDirective(CGF, S, OMPD_for, CodeGen);
@@ -2472,7 +2498,7 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
   bool HasLastprivateClause;
   // Check pre-condition.
   {
-    OMPLoopScope PreInitScope(*this, S);
+    OMPLoopScope PreInitScope(*this, S, /*EmitPreInit=*/true);
     // Skip the entire loop if we don't meet the precondition.
     // If the condition constant folds and can be elided, avoid emitting the
     // whole loop.
@@ -2515,10 +2541,10 @@ bool CodeGenFunction::EmitOMPWorksharingLoop(const OMPLoopDirective &S) {
       const unsigned IVSize = getContext().getTypeSize(IVExpr->getType());
       LValue PrevLB = EmitLValue(S.getPrevLowerBoundVariable());
       LValue PrevUB = EmitLValue(S.getPrevUpperBoundVariable());
-      auto PrevLBVal = EmitLoadOfScalar(PrevLB, SourceLocation());
+      auto PrevLBVal = EmitLoadOfScalar(PrevLB, S.getLocStart());
       PrevLBVal = Builder.CreateIntCast(PrevLBVal, Builder.getIntNTy(IVSize),
                                         /*isSigned=*/false);
-      auto PrevUBVal = EmitLoadOfScalar(PrevUB, SourceLocation());
+      auto PrevUBVal = EmitLoadOfScalar(PrevUB, S.getLocStart());
       PrevUBVal = Builder.CreateIntCast(PrevUBVal, Builder.getIntNTy(IVSize),
                                         /*isSigned=*/false);
       EmitStoreOfScalar(PrevLBVal, LB);
@@ -2819,9 +2845,9 @@ void CodeGenFunction::EmitSections(const OMPExecutableDirective &S) {
       // }
       // .omp.sections.exit:
       auto *ExitBB = CGF.createBasicBlock(".omp.sections.exit");
-      auto *SwitchStmt = CGF.Builder.CreateSwitch(
-          CGF.EmitLoadOfLValue(IV, S.getLocStart()).getScalarVal(), ExitBB,
-          CS == nullptr ? 1 : CS->size());
+      auto *SwitchStmt =
+          CGF.Builder.CreateSwitch(CGF.EmitLoadOfScalar(IV, S.getLocStart()),
+                                   ExitBB, CS == nullptr ? 1 : CS->size());
       if (CS) {
         unsigned CaseNumber = 0;
         for (auto *SubStmt : CS->children()) {
@@ -3196,7 +3222,8 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(const OMPExecutableDirective &S,
             Data.FirstprivateSimpleArrayImplicit
                 [OMPTaskDataTy::ImplicitMapArray::OMP_BASE_PTRS];
         auto *PointerToBasePtrsParam = ImplicitParamDecl::Create(
-            Context, Context.getPointerType(BasePtrsParam->getType()),
+            Context, /*DC=*/nullptr, BasePtrsParam->getLocation(),
+            /*Id=*/nullptr, Context.getPointerType(BasePtrsParam->getType()),
             ImplicitParamDecl::ImplicitParamKind::Other);
         Data.FirstprivateRefsSimpleArrayImplicit
             [OMPTaskDataTy::ImplicitMapArray::OMP_BASE_PTRS] =
@@ -3206,7 +3233,8 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(const OMPExecutableDirective &S,
             Data.FirstprivateSimpleArrayImplicit
                 [OMPTaskDataTy::ImplicitMapArray::OMP_PTRS];
         auto *PointerToPtrsParam = ImplicitParamDecl::Create(
-            Context, Context.getPointerType(PtrsParam->getType()),
+            Context, /*DC=*/nullptr, PtrsParam->getLocation(), /*Id=*/nullptr,
+            Context.getPointerType(PtrsParam->getType()),
             ImplicitParamDecl::ImplicitParamKind::Other);
         Data.FirstprivateRefsSimpleArrayImplicit
             [OMPTaskDataTy::ImplicitMapArray::OMP_PTRS] = PointerToPtrsParam;
@@ -3215,7 +3243,8 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(const OMPExecutableDirective &S,
             Data.FirstprivateSimpleArrayImplicit
                 [OMPTaskDataTy::ImplicitMapArray::OMP_SIZES];
         auto *PointerToSizesParam = ImplicitParamDecl::Create(
-            Context, Context.getPointerType(SizesParam->getType()),
+            Context, /*DC=*/nullptr, SizesParam->getLocation(), /*Id=*/nullptr,
+            Context.getPointerType(SizesParam->getType()),
             ImplicitParamDecl::ImplicitParamKind::Other);
         Data.FirstprivateRefsSimpleArrayImplicit
             [OMPTaskDataTy::ImplicitMapArray::OMP_SIZES] = PointerToSizesParam;
@@ -3262,7 +3291,7 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(const OMPExecutableDirective &S,
                         Replacement.getPointer(), CGF.getContext().VoidPtrTy,
                         CGF.getContext().getPointerType(
                             Data.ReductionCopies[Cnt]->getType()),
-                        SourceLocation()),
+                        Data.ReductionVars[Cnt]->getExprLoc()),
                     Replacement.getAlignment());
         Replacement = RedCG.adjustPrivateAddress(CGF, Cnt, Replacement);
         Scope.addPrivate(RedCG.getBaseDecl(Cnt),
@@ -3304,15 +3333,16 @@ void CodeGenFunction::EmitOMPTaskBasedDirective(const OMPExecutableDirective &S,
         RedCG.emitAggregateType(CGF, Cnt);
         // The taskgroup descriptor variable is always implicit firstprivate and
         // privatized already during procoessing of the firstprivates.
-        llvm::Value *ReductionsPtr = CGF.EmitLoadOfScalar(
-            CGF.EmitLValue(TaskgroupDescriptors[Cnt]), SourceLocation());
+        llvm::Value *ReductionsPtr =
+            CGF.EmitLoadOfScalar(CGF.EmitLValue(TaskgroupDescriptors[Cnt]),
+                                 InRedVars[Cnt]->getExprLoc());
         Address Replacement = CGF.CGM.getOpenMPRuntime().getTaskReductionItem(
             CGF, S.getLocStart(), ReductionsPtr, RedCG.getSharedLValue(Cnt));
         Replacement = Address(
             CGF.EmitScalarConversion(
                 Replacement.getPointer(), CGF.getContext().VoidPtrTy,
                 CGF.getContext().getPointerType(InRedPrivs[Cnt]->getType()),
-                SourceLocation()),
+                InRedVars[Cnt]->getExprLoc()),
             Replacement.getAlignment());
         Replacement = RedCG.adjustPrivateAddress(CGF, Cnt, Replacement);
         InRedScope.addPrivate(RedCG.getBaseDecl(Cnt),
@@ -3466,7 +3496,7 @@ void CodeGenFunction::EmitOMPDistributeLoop(
   bool HasLastprivateClause = false;
   // Check pre-condition.
   {
-    OMPLoopScope PreInitScope(*this, S);
+    OMPLoopScope PreInitScope(*this, S, /*EmitPreInit=*/true);
     // Skip the entire loop if we don't meet the precondition.
     // If the condition constant folds and can be elided, avoid emitting the
     // whole loop.
@@ -3686,6 +3716,7 @@ void CodeGenFunction::EmitOMPDistributeParallelForDirective(
   auto &&CGParallelFor = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
     auto &&CGInlinedWorksharingLoop = [&S](CodeGenFunction &CGF,
                                            PrePostActionTy &) {
+      OMPCancelStackRAII CancelRegion(CGF, S.getDirectiveKind(), S.hasCancel());
       CGF.EmitOMPWorksharingLoop(S);
     };
     emitCommonOMPParallelDirective(CGF, S, OMPD_for, CGInlinedWorksharingLoop);
@@ -3697,8 +3728,6 @@ void CodeGenFunction::EmitOMPDistributeParallelForDirective(
   };
 
   OMPLexicalScope Scope(*this, S, /*AsInlined=*/true);
-  OMPCancelStackRAII CancelRegion(*this, OMPD_distribute_parallel_for,
-                                  /*HasCancel=*/false);
   CGM.getOpenMPRuntime().emitInlinedDirective(*this, OMPD_distribute, CodeGen,
                                               false);
 }
@@ -4288,7 +4317,7 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
 
   auto &&SizeEmitter = [](CodeGenFunction &CGF,
                           const OMPLoopDirective &D) -> llvm::Value * {
-    OMPLoopScope(CGF, D);
+    OMPLoopScope(CGF, D, /*EmitPreInit=*/true);
     // Emit calculation of the iterations count.
     llvm::Value *NumIterations = CGF.EmitScalarExpr(D.getNumIterations());
     NumIterations = CGF.Builder.CreateIntCast(NumIterations, CGF.Int64Ty,
@@ -4468,6 +4497,8 @@ static void TargetParallelForCodegen(CodeGenFunction &CGF,
   // Emit directive as a combined directive that consists of two implicit
   // directives: 'parallel' with 'for' directive.
   auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
+    CodeGenFunction::OMPCancelStackRAII CancelRegion(
+        CGF, OMPD_target_parallel_for, S.hasCancel());
     CGF.EmitOMPWorksharingLoop(S);
   };
   emitCommonOMPParallelDirective(CGF, S, OMPD_parallel_for, CodeGen,
@@ -4568,6 +4599,8 @@ static void TargetTeamsDistributeParallelForCodegen(
     auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
       auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
         auto &&CodeGen = [&S](CodeGenFunction &CGF, PrePostActionTy &) {
+          CodeGenFunction::OMPCancelStackRAII CancelRegion(
+              CGF, S.getDirectiveKind(), S.hasCancel());
           CGF.EmitOMPWorksharingLoop(S);
         };
         emitCommonOMPParallelDirective(CGF, S, OMPD_for, CodeGen);
@@ -4903,7 +4936,9 @@ CodeGenFunction::getOMPCancelDestination(OpenMPDirectiveKind Kind) {
   assert(Kind == OMPD_for || Kind == OMPD_section || Kind == OMPD_sections ||
          Kind == OMPD_parallel_sections || Kind == OMPD_parallel_for ||
          Kind == OMPD_distribute_parallel_for ||
-         Kind == OMPD_target_parallel_for);
+         Kind == OMPD_target_parallel_for ||
+         Kind == OMPD_teams_distribute_parallel_for ||
+         Kind == OMPD_target_teams_distribute_parallel_for);
   return OMPCancelStack.getExitBlock();
 }
 
@@ -5151,7 +5186,7 @@ void CodeGenFunction::EmitOMPTaskLoopBasedDirective(const OMPLoopDirective &S) {
     // whole loop.
     bool CondConstant;
     llvm::BasicBlock *ContBlock = nullptr;
-    OMPLoopScope PreInitScope(CGF, S);
+    OMPLoopScope PreInitScope(CGF, S, /*EmitPreInit=*/true);
     if (CGF.ConstantFoldsToSimpleInteger(S.getPreCond(), CondConstant)) {
       if (!CondConstant)
         return;
@@ -5226,7 +5261,7 @@ void CodeGenFunction::EmitOMPTaskLoopBasedDirective(const OMPLoopDirective &S) {
                     IfCond](CodeGenFunction &CGF, llvm::Value *OutlinedFn,
                             const OMPTaskDataTy &Data) {
     auto &&CodeGen = [&](CodeGenFunction &CGF, PrePostActionTy &) {
-      OMPLoopScope PreInitScope(CGF, S);
+      OMPLoopScope PreInitScope(CGF, S, /*EmitPreInit=*/true);
       CGF.CGM.getOpenMPRuntime().emitTaskLoopCall(CGF, S.getLocStart(), S,
                                                   OutlinedFn, SharedsTy,
                                                   CapturedStruct, IfCond, Data);

@@ -424,14 +424,12 @@
 // Create host object and bundle.
 // CHK-BUJOBS: clang{{.*}}" "-cc1" "-triple" "powerpc64le--linux" "-emit-obj" {{.*}}"-fopenmp" {{.*}}"-o" "
 // CHK-BUJOBS-SAME: [[HOSTOBJ:[^\\/]+\.o]]" "-x" "ir" "{{.*}}[[HOSTBC]]"
-// CHK-BUJOBS: clang-offload-bundler{{.*}}" "-type=o"{{.*}}"-targets=openmp-powerpc64le-ibm-linux-gnu,openmp-x86_64-pc-linux-gnu,host-powerpc64le--linux" "-outputs=
-// CHK-BUJOBS-SAME: [[RES:[^\\/]+\.o]]" "-inputs={{.*}}[[T1OBJ]],{{.*}}[[T2OBJ]],{{.*}}[[HOSTOBJ]]"
+// CHK-BUJOBS: "/usr/bin/ld" "-r" {{.*}} "-o" {{.*}}.c.tmp.o
 // CHK-BUJOBS-ST: clang{{.*}}" "-cc1" "-triple" "powerpc64le--linux" "-S" {{.*}}"-fopenmp" {{.*}}"-o" "
 // CHK-BUJOBS-ST-SAME: [[HOSTASM:[^\\/]+\.s]]" "-x" "ir" "{{.*}}[[HOSTBC]]"
 // CHK-BUJOBS-ST: clang{{.*}}" "-cc1as" "-triple" "powerpc64le--linux" "-filetype" "obj" {{.*}}"-o" "
 // CHK-BUJOBS-ST-SAME: [[HOSTOBJ:[^\\/]+\.o]]" "{{.*}}[[HOSTASM]]"
-// CHK-BUJOBS-ST: clang-offload-bundler{{.*}}" "-type=o"{{.*}}"-targets=openmp-powerpc64le-ibm-linux-gnu,openmp-x86_64-pc-linux-gnu,host-powerpc64le--linux" "-outputs=
-// CHK-BUJOBS-ST-SAME: [[RES:[^\\/]+\.o]]" "-inputs={{.*}}[[T1OBJ]],{{.*}}[[T2OBJ]],{{.*}}[[HOSTOBJ]]"
+// CHK-BUJOBS-ST: "/usr/bin/ld" "-r" {{.*}} "-o" {{.*}}.c.tmp.o
 
 /// ###########################################################################
 
@@ -657,7 +655,7 @@
 // RUN:   | FileCheck -check-prefix=CHK-FOPENMP-TARGET-ARCHS %s
 
 // CHK-FOPENMP-TARGET-ARCHS: ptxas{{.*}}" "--gpu-name" "sm_60"
-// CHK-FOPENMP-TARGET-ARCHS: nvlink{{.*}}" "-arch" "sm_60"
+// CHK-FOPENMP-TARGET-ARCHS: nvcc{{.*}}" "-arch" "sm_60"
 
 /// ###########################################################################
 
@@ -666,7 +664,7 @@
 // RUN:   | FileCheck -check-prefix=CHK-FOPENMP-TARGET-COMPILATION %s
 
 // CHK-FOPENMP-TARGET-COMPILATION: ptxas{{.*}}" "--gpu-name" "sm_35"
-// CHK-FOPENMP-TARGET-COMPILATION: nvlink{{.*}}" "-arch" "sm_35"
+// CHK-FOPENMP-TARGET-COMPILATION: nvcc{{.*}}" "-arch" "sm_35"
 
 /// ###########################################################################
 
@@ -702,7 +700,7 @@
 // CHK-CUDA-DEBUG-SAME: "--dont-merge-basicblocks"
 // CHK-CUDA-DEBUG-SAME: "--return-at-end"
 // CHK-CUDA-DEBUG-SAME: "-c"
-// CHK-CUDA-DEBUG: nvlink
+// CHK-CUDA-DEBUG: nvcc
 // CHK-CUDA-DEBUG-SAME: "-g"
 
 /// Check debug command lines for NVPTX target
@@ -721,7 +719,7 @@
 // CHK-CUDA-DEBUGO0-NODEBUG-SAME: "--dont-merge-basicblocks"
 // CHK-CUDA-DEBUGO0-NODEBUG-SAME: "--return-at-end"
 // CHK-CUDA-DEBUGO0-NODEBUG-SAME: "-c"
-// CHK-CUDA-DEBUGO0-NODEBUG: nvlink
+// CHK-CUDA-DEBUGO0-NODEBUG: nvcc
 // CHK-CUDA-DEBUGO0-NODEBUG-SAME: "-g"
 
 /// Check debug command lines for NVPTX target
@@ -740,38 +738,46 @@
 // CHK-CUDA-DEBUG-O3-DEBUG-SAME: "--dont-merge-basicblocks"
 // CHK-CUDA-DEBUG-O3-DEBUG-SAME: "--return-at-end"
 // CHK-CUDA-DEBUG-O3-DEBUG-SAME: "-c"
-// CHK-CUDA-DEBUG-O3-DEBUG: nvlink
+// CHK-CUDA-DEBUG-O3-DEBUG: nvcc
 // CHK-CUDA-DEBUG-O3-DEBUG-SAME: "-g"
 
 /// Check debug command lines for NVPTX target
-// RUN:   %clang -### -fopenmp=libomp -target powerpc64le-ibm-linux-gnu -fopenmp-targets=nvptx64-nvidia-cuda %s -O3 2>&1 \
+// RUN:   %clang -### -fopenmp=libomp -target powerpc64le-ibm-linux-gnu -fopenmp-targets=nvptx64-nvidia-cuda %s -O3 -g 2>&1 \
 // RUN:   | FileCheck -check-prefix=CHK-CUDA-O3 %s
 // CHK-CUDA-O3: "-cc1"
 // CHK-CUDA-O3-SAME: "-triple" "powerpc64le-ibm-linux-gnu"
+// CHK-CUDA-O3-SAME: "-debug-info-kind=limited"
 // CHK-CUDA-O3: "-cc1"
 // CHK-CUDA-O3-SAME: "-triple" "nvptx64-nvidia-cuda"
+// CHK-CUDA-O3-SAME: "-backend-option" "-no-cuda-debug"
+// CHK-CUDA-O3-SAME: "-debug-info-kind=line-tables-only"
 // CHK-CUDA-O3-SAME: "-O3"
 // CHK-CUDA-O3: ptxas
 // CHK-CUDA-O3-SAME: "-O3"
+// CHK-CUDA-O3-SAME: "--generate-line-info"
 // CHK-CUDA-O3-SAME: "-c"
 
 /// Check debug command lines for NVPTX target
-// RUN:   %clang -### -fopenmp=libomp -target powerpc64le-ibm-linux-gnu -fopenmp-targets=nvptx64-nvidia-cuda %s -O3 --no-cuda-noopt-device-debug 2>&1 \
+// RUN:   %clang -### -fopenmp=libomp -target powerpc64le-ibm-linux-gnu -fopenmp-targets=nvptx64-nvidia-cuda %s -O3 --no-cuda-noopt-device-debug -g 2>&1 \
 // RUN:   | FileCheck -check-prefix=CHK-CUDA-O3-NODEBUG %s
 // CHK-CUDA-O3-NODEBUG: "-cc1"
 // CHK-CUDA-O3-NODEBUG-SAME: "-triple" "powerpc64le-ibm-linux-gnu"
+// CHK-CUDA-O3-NODEBUG-SAME: "-debug-info-kind=limited"
 // CHK-CUDA-O3-NODEBUG: "-cc1"
 // CHK-CUDA-O3-NODEBUG-SAME: "-triple" "nvptx64-nvidia-cuda"
+// CHK-CUDA-O3-NODEBUG-SAME: "-backend-option" "-no-cuda-debug"
+// CHK-CUDA-O3-NODEBUG-SAME: "-debug-info-kind=line-tables-only"
 // CHK-CUDA-O3-NODEBUG-SAME: "-O3"
 // CHK-CUDA-O3-NODEBUG: ptxas
 // CHK-CUDA-O3-NODEBUG-SAME: "-O3"
+// CHK-CUDA-O3-NODEBUG-SAME: "--generate-line-info"
 // CHK-CUDA-O3-NODEBUG-SAME: "-c"
 
 /// =========
 /// Test driver commands when linking against static libraries
-// RUN:   touch /tmp/libtest.a
-// RUN:   %clang -### -fopenmp=libomp -fopenmp-targets=nvptx64-nvidia-cuda /tmp/libtest.a %s -O3 --no-cuda-noopt-device-debug 2>&1 \
+// RUN:   touch %T/libtest.a
+// RUN:   %clang -### -fopenmp=libomp -fopenmp-targets=nvptx64-nvidia-cuda %T/libtest.a %s -O3 --no-cuda-noopt-device-debug 2>&1 \
 // RUN:   | FileCheck -check-prefix=STATIC-LIB-LINKING %s
 
 // STATIC-LIB-LINKING:  ptxas"{{.*}}"--output-file" "{{.*}}openmp-offload-{{.*}}.o" "{{.*}}openmp-offload-{{.*}}.s" "-c"
-// STATIC-LIB-LINKING:  nvlink"{{.*}}"{{.*}}libtest-{{.*}}.o" "{{.*}}openmp-offload-{{.*}}.cubin"
+// STATIC-LIB-LINKING:  nvcc"{{.*}}"{{.*}}libtest-{{.*}}.o" "{{.*}}openmp-offload-{{.*}}.cubin"
