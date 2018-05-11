@@ -4080,9 +4080,9 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   } else if (Triple == "harp") {
     sub_target_id = 9002;
   } else if (Triple == "harpsim") {
-    sub_target_id = 9005;
-  } else if (Triple == "awsf1") {
     sub_target_id = 9006;
+  } else if (Triple == "awsf1") {
+    sub_target_id = 9007;
   } else {
     return;
   }
