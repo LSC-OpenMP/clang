@@ -4080,7 +4080,9 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   } else if (Triple == "harp") {
     sub_target_id = 9002;
   } else if (Triple == "harpsim") {
-    sub_target_id = 9004;
+    sub_target_id = 9005;
+  } else if (Triple == "awsf1") {
+    sub_target_id = 9006;
   } else {
     return;
   }
@@ -9730,7 +9732,8 @@ void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
 
   // check if is an FPGA device
   auto &Triple = CGM.getTarget().getTargetOpts().Triple;
-  if ( (Triple != "smartnic") && (Triple != "harp") && (Triple != "harpsim") ) {
+  if ((Triple != "smartnic") && (Triple != "harp") && (Triple != "harpsim") && 
+      (Triple != "awsf1") ) {
     return;
   }
 
