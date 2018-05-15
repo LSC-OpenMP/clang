@@ -7670,6 +7670,7 @@ void CGOpenMPRuntime::emitTargetCall(
   auto OffloadCheckBlock = CGF.createBasicBlock("omp_offload.check");
   auto OffloadErrorVal = CGF.EmitLoadOfScalar(OffloadError, SourceLocation());
   auto Failed = CGF.Builder.CreateIsNotNull(OffloadErrorVal);
+
   CGF.Builder.CreateCondBr(Failed, OffloadFailedBlock, OffloadCheckBlock);
 
   CGF.EmitBlock(OffloadFailedBlock);
@@ -7698,13 +7699,13 @@ void CGOpenMPRuntime::emitTargetCall(
   MappableExprsHandler::MapValuesArrayTy CheckArgs;
   SmallVector<llvm::Value*, 8> ToFreeArgs;
 
-  for (unsigned int i = 0; i < KernelArgs.size(); i++) {
-    if (0 < (MapTypes[i] & MappableExprsHandler::OMP_MAP_FROM)) {
-      llvm::Value* ptrMalloc = CGF.Builder.CreateCall(malloc_fn, {Sizes[i]});
-      CheckArgs.push_back(CGF.Builder.CreatePointerCast(ptrMalloc, KernelArgs[i]->getType()));
+  for (unsigned int i = 0; i < MapArrays.KernelArgs.size(); i++) {
+    if (0 < (MapArrays.MapTypes[i] & MappableExprsHandler::OMP_MAP_FROM)) {
+      llvm::Value* ptrMalloc = CGF.Builder.CreateCall(malloc_fn, {MapArrays.Sizes[i]});
+      CheckArgs.push_back(CGF.Builder.CreatePointerCast(ptrMalloc, MapArrays.KernelArgs[i]->getType()));
       ToFreeArgs.push_back(ptrMalloc);
     } else {
-      CheckArgs.push_back(KernelArgs[i]);
+      CheckArgs.push_back(MapArrays.KernelArgs[i]);
     }
   }
 
