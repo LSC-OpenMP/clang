@@ -427,6 +427,12 @@ struct OMPMapArrays final {
   OMPMapArrays() = default;
 };
 
+struct OMPCheckInfo {
+  llvm::Value* HostArg;
+  llvm::Value* DeviceArg;
+  llvm::Value* Size;
+};
+
 class CGOpenMPRuntime {
 protected:
   CodeGenModule &CGM;
@@ -622,6 +628,7 @@ private:
   ///   char      *name;       // Name of the function or global.
   ///   char      *module;     // Name of the module to offloading if is an FPGA.
   ///   size_t     size;       // Size of the entry info (0 if it a function).
+  //    int32_t    check;      // Flags associated with check feature.
   /// };
   QualType TgtOffloadEntryQTy;
   /// struct __tgt_device_image{
@@ -647,6 +654,8 @@ private:
   QualType TgtBinaryDescriptorQTy;
   /// \brief Target FPGA Module name
   std::queue<std::string> TgtFPGAModule;
+  /// \brief Target Check Flags int32_t
+  std::queue<int32_t> TgtCheckFlags;
   /// \brief Entity that registers the offloading constants that were emitted so
   /// far.
   class OffloadEntriesInfoManagerTy {

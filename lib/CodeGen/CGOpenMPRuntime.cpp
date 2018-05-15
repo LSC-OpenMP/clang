@@ -749,8 +749,6 @@ enum OpenMPRTLFunction {
   // *host_ptr, int32_t arg_num, void** args_base, void **args, size_t
   // *arg_sizes, int64_t *arg_types, int32_t num_teams, int32_t thread_limit);
   OMPRTL__tgt_target_teams_nowait,
-  // Call to int32_t __tgt_target_fpga(void *module);
-  OMPRTL__tgt_target_fpga,
   // Call to void __tgt_register_lib(__tgt_bin_desc *desc);
   OMPRTL__tgt_register_lib,
   // Call to void __tgt_unregister_lib(__tgt_bin_desc *desc);
@@ -811,6 +809,9 @@ enum OpenMPRTLFunction {
   // kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
   // kmp_routine_entry_t *task_entry, int64_t device_id);
   OMPRTL__kmpc_tgt_target_task_alloc,
+  // Call to void __tgt_check_compara_variable(void *host_ptr, void* tgt_ptr,
+  // size_t size);
+  OMPRTL__tgt_check_compare_variable,
 };
 
 /// A basic class for pre|post-action for advanced codegen sequence for OpenMP
@@ -2290,14 +2291,6 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_teams_nowait");
     break;
   }
-  case OMPRTL__tgt_target_fpga: {
-    // Build int32_t __tgt_target_fpga(void *module);
-    llvm::Type *TypeParams[] = {CGM.VoidPtrTy};
-    llvm::FunctionType *FnTy =
-        llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_fpga");
-    break;
-  }
   case OMPRTL__tgt_register_lib: {
     // Build void __tgt_register_lib(__tgt_bin_desc *desc);
     QualType ParamTy =
@@ -2555,6 +2548,17 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
         llvm::FunctionType::get(CGM.VoidPtrTy, TypeParams, /*isVarArg=*/false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy,
                                       /*Name=*/"__kmpc_omp_target_task_alloc");
+    break;
+  }
+  case OMPRTL__tgt_check_compare_variable: {
+    // Build void __tgt_check_variable_compara(void *host_ptr, void *tgt_ptr,
+    // size_t size);
+    llvm::Type *TypeParams[] = {CGM.VoidPtrTy,
+                                CGM.VoidPtrTy,
+                                CGM.SizeTy};
+    llvm::FunctionType *FnTy =
+        llvm::FunctionType::get(CGM.VoidTy, TypeParams, /*isVarArg*/ false);
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_check_compare_variable");
     break;
   }
   }
@@ -4055,8 +4059,6 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
   int32_t sub_target_id;
   auto *TgtConfigurationType = cast<llvm::StructType>(
       CGM.getTypes().ConvertTypeForMem(getTgtConfigurationyQTy()));
-  llvm::LLVMContext &C = CGM.getModule().getContext();
-  llvm::Module &M = CGM.getModule();
 
   // If we do not have entries, we dont need to do anything.
   if (OffloadEntriesInfoManager.empty())
@@ -4138,6 +4140,14 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
   llvm::Constant *StrModulePtr =
       llvm::ConstantExpr::getBitCast(StrModule, CGM.Int8PtrTy);
 
+  // Create int32_t check flags.
+  int32_t CheckFlags = 0;
+
+  if (!this->TgtCheckFlags.empty()) {
+    CheckFlags = this->TgtCheckFlags.front();
+    this->TgtCheckFlags.pop();
+  }
+
   // Decide linkage type of the entry struct by looking at the linkage type of
   // the variable. By default the linkage is Link-Once.
   auto EntryLinkage = llvm::GlobalValue::WeakAnyLinkage;
@@ -4153,6 +4163,7 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
   EntryInit.add(StrPtr);
   EntryInit.add(StrModulePtr);
   EntryInit.addInt(CGM.SizeTy, Size);
+  EntryInit.addInt(CGM.Int32Ty, CheckFlags);
   EntryInit.addInt(CGM.Int32Ty, Flags);
   EntryInit.addInt(CGM.Int32Ty, 0);
   SmallString<128> EntryGblName(".omp_offloading.entry.");
@@ -4422,6 +4433,7 @@ QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
   //   char      *name;       // Name of the function or global.
   //   char      *module;     // Name of the module to offloading if is an FPGA.
   //   size_t     size;       // Size of the entry info (0 if it a function).
+  //   int32_t    check;      // Flags associated with check feature.
   //   int32_t    flags;      // Flags associated with the entry, e.g. 'link'.
   //   int32_t    reserved;   // Reserved, to use by the runtime library.
   // };
@@ -4433,6 +4445,8 @@ QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
     addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
     addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
     addFieldToRecordDecl(C, RD, C.getSizeType());
+    addFieldToRecordDecl(
+        C, RD, C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/true));
     addFieldToRecordDecl(
         C, RD, C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/true));
     addFieldToRecordDecl(
@@ -7665,18 +7679,28 @@ void CGOpenMPRuntime::emitTargetCall(
   }
 
   // Check the error code and execute the host version if required.
+  llvm::Value *fail_value = llvm::ConstantInt::get(CGM.Int32Ty, /*V=*/-1u);
+  llvm::Value *check_value = llvm::ConstantInt::get(CGM.Int32Ty, /*V=*/1);
+
   auto OffloadFailedBlock = CGF.createBasicBlock("omp_offload.failed");
   auto OffloadContBlock = CGF.createBasicBlock("omp_offload.cont");
+  auto OffloadBeforeCheckBlock = CGF.createBasicBlock("omp_offload.before_check");
   auto OffloadCheckBlock = CGF.createBasicBlock("omp_offload.check");
   auto OffloadErrorVal = CGF.EmitLoadOfScalar(OffloadError, SourceLocation());
-  auto Failed = CGF.Builder.CreateIsNotNull(OffloadErrorVal);
+  auto Failed = CGF.Builder.CreateICmpEQ(OffloadErrorVal, fail_value);
+  auto Check = CGF.Builder.CreateICmpEQ(OffloadErrorVal, check_value);
 
-  CGF.Builder.CreateCondBr(Failed, OffloadFailedBlock, OffloadCheckBlock);
+  CGF.Builder.CreateCondBr(Failed, OffloadFailedBlock, OffloadBeforeCheckBlock);
 
   CGF.EmitBlock(OffloadFailedBlock);
+
   emitOutlinedFunctionCall(CGF, D.getLocStart(), OutlinedFn,
                            MapArrays.KernelArgs);
   CGF.EmitBranch(OffloadContBlock);
+
+  CGF.EmitBlock(OffloadBeforeCheckBlock);
+
+  CGF.Builder.CreateCondBr(Check, OffloadCheckBlock, OffloadContBlock);
 
   CGF.EmitBlock(OffloadCheckBlock);
 
@@ -7697,13 +7721,17 @@ void CGOpenMPRuntime::emitTargetCall(
   auto free_fn = module->getOrInsertFunction("free", free_ty);
 
   MappableExprsHandler::MapValuesArrayTy CheckArgs;
-  SmallVector<llvm::Value*, 8> ToFreeArgs;
+  SmallVector<OMPCheckInfo, 8> CheckInfoArgs;
 
   for (unsigned int i = 0; i < MapArrays.KernelArgs.size(); i++) {
     if (0 < (MapArrays.MapTypes[i] & MappableExprsHandler::OMP_MAP_FROM)) {
-      llvm::Value* ptrMalloc = CGF.Builder.CreateCall(malloc_fn, {MapArrays.Sizes[i]});
-      CheckArgs.push_back(CGF.Builder.CreatePointerCast(ptrMalloc, MapArrays.KernelArgs[i]->getType()));
-      ToFreeArgs.push_back(ptrMalloc);
+      llvm::Value* ptrHostArg = CGF.Builder.CreateCall(malloc_fn, {MapArrays.Sizes[i]});
+      CheckArgs.push_back(CGF.Builder.CreatePointerCast(ptrHostArg, MapArrays.KernelArgs[i]->getType()));
+
+      llvm::Value* ptrDeviceArg = CGF.Builder.CreatePointerCast(MapArrays.Pointers[i],
+          llvm::PointerType::get(llvm::Type::getInt8Ty(context), 0));
+
+      CheckInfoArgs.push_back({ptrHostArg, ptrDeviceArg, MapArrays.Sizes[i]});
     } else {
       CheckArgs.push_back(MapArrays.KernelArgs[i]);
     }
@@ -7711,8 +7739,17 @@ void CGOpenMPRuntime::emitTargetCall(
 
   CGF.Builder.CreateCall(OutlinedFn, CheckArgs);
 
-  for (auto arg : ToFreeArgs) {
-    CGF.Builder.CreateCall(free_fn, {arg});
+  for (unsigned int i = 0; i < CheckInfoArgs.size(); i++) {
+    auto argHost   = CheckInfoArgs[i].HostArg;
+    auto argDevice = CheckInfoArgs[i].DeviceArg;
+    auto argSize   = CheckInfoArgs[i].Size;
+
+    auto args = {argHost, argDevice, argSize};
+
+    auto &RT = CGF.CGM.getOpenMPRuntime();
+
+    CGF.EmitRuntimeCall(RT.createRuntimeFunction(OMPRTL__tgt_check_compare_variable), args);
+    CGF.Builder.CreateCall(free_fn, {argHost});
   }
 
   CGF.EmitBranch(OffloadContBlock);
@@ -9782,18 +9819,17 @@ void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
   if (c_use) {
     if (c_use->getUseKind() == OMPC_USE_hrw) {
       const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
-      const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
 
       if (c_module) {
         this->TgtFPGAModule.push(c_module->getModuleNameInfo());
-      } else {
-        // TODO(ciroceissler): use OpenCL
-        llvm::errs() << "OpenCL is not available!\n";
-      }
-
-      if (c_check) {
-        llvm::errs() << "check!\n";
       }
     }
+  }
+
+  const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
+  if (c_check) {
+    this->TgtCheckFlags.push(1);
+  } else {
+    this->TgtCheckFlags.push(0);
   }
 }
