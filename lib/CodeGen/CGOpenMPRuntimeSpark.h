@@ -98,7 +98,16 @@ public:
       OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
       unsigned CaptureLevel = 1, unsigned ImplicitParamStop = 0) override;
 
+  llvm::Function *emitFakeOpenMPFunction(
+      const CapturedStmt &S, bool UseCapturedArgumentsOnly = false,
+      unsigned CaptureLevel = 1, unsigned ImplicitParamStop = 0,
+      bool NonAliasedMaps = false);
+
   struct OMPSparkMappingInfo {
+    const OMPLoopDirective OMPDirective;
+    llvm::SmallSet<const VarDecl *, 8> Inputs;
+    llvm::SmallSet<const VarDecl *, 8> Outputs;
+    llvm::SmallSet<const VarDecl *, 8> InputsOutputs;
     llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
         InOutVarUse;
     llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
@@ -116,12 +125,15 @@ public:
         CounterInfo;
     llvm::DenseMap<const VarDecl *, llvm::Value *> KernelArgVars;
     unsigned Identifier;
+    OMPSparkMappingInfo(const OMPLoopDirective Directive) : OMPDirective(Directive) {
+    }
+    ~OMPSparkMappingInfo() {}
   };
 
   unsigned CurrentIdentifier = 0;
   llvm::SmallVector<OMPSparkMappingInfo *, 16> SparkMappingFunctions;
 
-  bool IsSparkTargetRegion;
+  bool ShouldAccessJNIArgs = false;
 
   llvm::DenseMap<const ValueDecl *, unsigned> OffloadingMapVarsIndex;
   llvm::DenseMap<const ValueDecl *, unsigned> OffloadingMapVarsType;
@@ -190,7 +202,7 @@ public:
   llvm::Value *EmitJNICreateNewTuple(CodeGenFunction &CGF,
                                      ArrayRef<llvm::Value *> Elements);
 
-  void GenerateMappingKernel(const OMPExecutableDirective &S);
+  llvm::Function *GenerateMappingKernel(const OMPExecutableDirective &S);
   void GenerateReductionKernel(const OMPReductionClause &C,
                                const OMPExecutableDirective &S);
 
@@ -224,6 +236,7 @@ public:
   /// otherwise.
   llvm::Value *getOpenMPKernelArgVar(const VarDecl *VD) {
     if (SparkMappingFunctions.empty()) return 0;
+    llvm::errs() << "Look for " << VD->getNameAsString() << "\n";
     return SparkMappingFunctions.back()->KernelArgVars[VD];
   }
   /// \brief Checks, if the specified variable is currently an argument.

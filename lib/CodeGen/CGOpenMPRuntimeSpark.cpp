@@ -30,6 +30,117 @@ using namespace CodeGen;
 
 #define VERBOSE 1
 
+namespace {
+///
+/// FIXME: This is stupid!
+/// These class definitions are duplicated from CGOpenMPRuntime.cpp.  They
+/// should instead be placed in the header file CGOpenMPRuntime.h and made
+/// accessible to CGOpenMPRuntimeNVPTX.cpp.  Otherwise not only do we have
+/// to duplicate code, but we have to ensure that both these definitions are
+/// always the same.  This is a problem because a CGOpenMPRegionInfo object
+/// from CGOpenMPRuntimeNVPTX.cpp is accessed in methods of CGOpenMPRuntime.cpp.
+///
+/// \brief Base class for handling code generation inside OpenMP regions.
+class CGOpenMPRegionInfo : public CodeGenFunction::CGCapturedStmtInfo {
+public:
+  /// \brief Kinds of OpenMP regions used in codegen.
+  enum CGOpenMPRegionKind {
+    /// \brief Region with outlined function for standalone 'parallel'
+    /// directive.
+    ParallelOutlinedRegion,
+    /// \brief Region with outlined function for standalone 'simd'
+    /// directive.
+    SimdOutlinedRegion,
+    /// \brief Region with outlined function for standalone 'task' directive.
+    TaskOutlinedRegion,
+    /// \brief Region for constructs that do not require function outlining,
+    /// like 'for', 'sections', 'atomic' etc. directives.
+    InlinedRegion,
+    /// \brief Region with outlined function for standalone 'target' directive.
+    TargetRegion,
+  };
+
+  CGOpenMPRegionInfo(const CapturedStmt &CS,
+                     const CGOpenMPRegionKind RegionKind,
+                     const RegionCodeGenTy &CodeGen, OpenMPDirectiveKind Kind)
+      : CGCapturedStmtInfo(CS, CR_OpenMP), RegionKind(RegionKind),
+        CodeGen(CodeGen), Kind(Kind) {}
+
+  CGOpenMPRegionInfo(const CGOpenMPRegionKind RegionKind,
+                     const RegionCodeGenTy &CodeGen, OpenMPDirectiveKind Kind)
+      : CGCapturedStmtInfo(CR_OpenMP), RegionKind(RegionKind), CodeGen(CodeGen),
+        Kind(Kind) {}
+
+  /// \brief Get a variable or parameter for storing global thread id
+  /// inside OpenMP construct.
+  virtual const VarDecl *getThreadIDVariable() const = 0;
+
+  /// \brief Emit the captured statement body.
+  void EmitBody(CodeGenFunction &CGF, const Stmt *S) override;
+
+  CGOpenMPRegionKind getRegionKind() const { return RegionKind; }
+
+  OpenMPDirectiveKind getDirectiveKind() const { return Kind; }
+
+  static bool classof(const CGCapturedStmtInfo *Info) {
+    return Info->getKind() == CR_OpenMP;
+  }
+
+  ~CGOpenMPRegionInfo() override = default;
+
+protected:
+  CGOpenMPRegionKind RegionKind;
+  RegionCodeGenTy CodeGen;
+  OpenMPDirectiveKind Kind;
+};
+
+void CGOpenMPRegionInfo::EmitBody(CodeGenFunction &CGF, const Stmt * /*S*/) {
+  if (!CGF.HaveInsertPoint())
+    return;
+  // 1.2.2 OpenMP Language Terminology
+  // Structured block - An executable statement with a single entry at the
+  // top and a single exit at the bottom.
+  // The point of exit cannot be a branch out of the structured block.
+  // longjmp() and throw() must not violate the entry/exit criteria.
+  CGF.EHStack.pushTerminate();
+  {
+    CodeGenFunction::RunCleanupsScope Scope(CGF);
+    CodeGen(CGF);
+  }
+  CGF.EHStack.popTerminate();
+}
+
+/// \brief API for captured statement code generation in OpenMP constructs.
+class CGOpenMPOutlinedRegionInfo final : public CGOpenMPRegionInfo {
+public:
+  CGOpenMPOutlinedRegionInfo(const CapturedStmt &CS, const VarDecl *ThreadIDVar,
+                             const RegionCodeGenTy &CodeGen,
+                             OpenMPDirectiveKind Kind)
+      : CGOpenMPRegionInfo(CS, ParallelOutlinedRegion, CodeGen, Kind),
+        ThreadIDVar(ThreadIDVar) {
+    assert(ThreadIDVar != nullptr && "No ThreadID in OpenMP region.");
+  }
+
+  /// \brief Get a variable or parameter for storing global thread id
+  /// inside OpenMP construct.
+  const VarDecl *getThreadIDVariable() const override { return ThreadIDVar; }
+
+  /// \brief Get the name of the capture helper.
+  StringRef getHelperName() const override { return ".omp_outlined."; }
+
+  static bool classof(const CGCapturedStmtInfo *Info) {
+    return CGOpenMPRegionInfo::classof(Info) &&
+           cast<CGOpenMPRegionInfo>(Info)->getRegionKind() ==
+               ParallelOutlinedRegion;
+  }
+
+private:
+  /// \brief A variable or parameter storing global thread id for OpenMP
+  /// constructs.
+  const VarDecl *ThreadIDVar;
+};
+} // namespace
+
 CGOpenMPRuntimeSpark::CGOpenMPRuntimeSpark(CodeGenModule &CGM)
     : CGOpenMPRuntime(CGM) {
   llvm::errs() << "CGOpenMPRuntimeSpark\n";
@@ -45,23 +156,128 @@ void CGOpenMPRuntimeSpark::emitTargetOutlinedFunction(
   llvm::errs() << "CGOpenMPRuntimeSpark::emitTargetOutlinedFunction\n";
   assert(!ParentName.empty() && "Invalid target region parent name!");
 
+  BuildJNITy();
+
   emitTargetOutlinedFunctionHelper(D, ParentName, OutlinedFn, OutlinedFnID,
                                    IsOffloadEntry, CodeGen, 0);
 
   OutlinedFn->setCallingConv(llvm::CallingConv::C);
   OutlinedFn->addFnAttr(llvm::Attribute::NoUnwind);
   OutlinedFn->removeFnAttr(llvm::Attribute::OptimizeNone);
+
+  EmitSparkJob();
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::emitParallelOutlinedFunction(
     const OMPExecutableDirective &D, const VarDecl *ThreadIDVar,
     OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel, unsigned ImplicitParamStop) {
-  DefineJNITypes();
-  GenerateMappingKernel(D);
-  EmitSparkJob();
-  return CGOpenMPRuntime::emitParallelOutlinedFunction(
-      D, ThreadIDVar, InnermostKind, CodeGen, CaptureLevel, ImplicitParamStop);
+
+  llvm::errs() << "CGOpenMPRuntimeSpark::emitParallelOutlinedFunction\n";
+
+  ShouldAccessJNIArgs = true;
+  auto *MappingFn = GenerateMappingKernel(D);
+  ShouldAccessJNIArgs = false;
+  MappingFn->setLinkage(llvm::GlobalValue::WeakAnyLinkage);
+
+  //  // Call to a parallel that is not combined with a teams or target
+  //  // directive (non SPMD).
+  //  // This could also be a nested 'parallel' in an SPMD region.
+  //  const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+  //  if (D.hasClausesOfKind<OMPDependClause>() &&
+  //      isOpenMPTargetExecutionDirective(D.getDirectiveKind()))
+  //    CS = cast<CapturedStmt>(CS->getCapturedStmt());
+
+  //  CodeGenFunction CGF(CGM, true);
+  //  llvm::Function *OutlinedFun = nullptr;
+  //  {
+  //    // The outlined function takes as arguments the global_tid, bound_tid,
+  //    // and a capture structure created from the captured variables.
+  //    OutlinedFun = CGF.GenerateOpenMPCapturedStmtFunction(
+  //        *CS, /*UseCapturedArgumentsOnly=*/false, CaptureLevel);
+  //  }
+  //  return OutlinedFun;
+
+  const auto *CS = cast<CapturedStmt>(D.getAssociatedStmt());
+
+  return emitFakeOpenMPFunction(*CS);
+}
+
+llvm::Function *CGOpenMPRuntimeSpark::emitFakeOpenMPFunction(
+    const CapturedStmt &S, bool UseCapturedArgumentsOnly, unsigned CaptureLevel,
+    unsigned ImplicitParamStop, bool NonAliasedMaps) {
+
+  bool UIntPtrCastRequired = true;
+  // Build the argument list.
+
+  FunctionArgList Args;
+  llvm::MapVector<const Decl *, std::pair<const VarDecl *, Address>> LocalAddrs;
+  llvm::DenseMap<const Decl *, std::pair<const Expr *, llvm::Value *>> VLASizes;
+  SmallString<256> Buffer;
+  llvm::raw_svector_ostream Out(Buffer);
+  Out << "FakeFunction";
+
+  CodeGenFunction CGF(CGM, true);
+
+  const CapturedDecl *CD = S.getCapturedDecl();
+  const RecordDecl *RD = S.getCapturedRecordDecl();
+  assert(CD->hasBody() && "missing CapturedDecl body");
+
+  // Build the argument list.
+  CodeGenModule &CGM = CGF.CGM;
+  ASTContext &Ctx = CGM.getContext();
+
+  CGF.GenerateOpenMPCapturedStmtParameters(S, UseCapturedArgumentsOnly,
+                                           CaptureLevel, ImplicitParamStop,
+                                           NonAliasedMaps, false, Args);
+
+  FunctionArgList TargetArgs;
+  if (UIntPtrCastRequired) {
+    TargetArgs.append(Args.begin(), Args.end());
+  } else {
+    if (!UseCapturedArgumentsOnly) {
+      TargetArgs.append(CD->param_begin(),
+                        std::next(CD->param_begin(), ImplicitParamStop));
+    }
+    auto I = S.captures().begin();
+    unsigned Cnt = 0;
+    for (auto *FD : RD->fields()) {
+      if (I->capturesVariable() || I->capturesVariableByCopy()) {
+        VarDecl *CapVar = I->getCapturedVar();
+        if (auto *C = dyn_cast<OMPCapturedExprDecl>(CapVar)) {
+          // Check to see if the capture is to be a parameter in the
+          // outlined function at this level.
+          if (C->getCaptureLevel() < CaptureLevel) {
+            ++I;
+            continue;
+          }
+        }
+      }
+      TargetArgs.emplace_back(
+          CGM.getOpenMPRuntime().translateParameter(FD, Args[Cnt]));
+      ++I;
+      ++Cnt;
+    }
+    TargetArgs.append(
+        std::next(CD->param_begin(), CD->getContextParamPosition() + 1),
+        CD->param_end());
+  }
+
+  // Create the function declaration.
+  FunctionType::ExtInfo ExtInfo;
+  const CGFunctionInfo &FuncInfo =
+      CGM.getTypes().arrangeBuiltinFunctionDeclaration(Ctx.VoidTy, TargetArgs);
+  llvm::FunctionType *FuncLLVMTy = CGM.getTypes().GetFunctionType(FuncInfo);
+
+  llvm::Function *F =
+      llvm::Function::Create(FuncLLVMTy, llvm::GlobalValue::InternalLinkage,
+                             Out.str(), &CGM.getModule());
+  CGM.SetInternalFunctionAttributes(CD, F, FuncInfo);
+
+  CGF.StartFunction(CD, Ctx.VoidTy, F, FuncInfo, TargetArgs, S.getLocStart(),
+                    CD->getBody()->getLocStart());
+  CGF.FinishFunction();
+  return F;
 }
 
 void CGOpenMPRuntimeSpark::EmitSparkJob() {
@@ -103,6 +319,7 @@ void CGOpenMPRuntimeSpark::EmitSparkJob() {
 
   for (auto it = SparkMappingFunctions.begin();
        it != SparkMappingFunctions.end(); it++) {
+    llvm::errs() << "SparkMappingFunctions " << (*it)->Identifier << "\n";
     EmitSparkMapping(SPARK_FILE, **it, (it + 1) == SparkMappingFunctions.end());
   }
 
@@ -111,10 +328,13 @@ void CGOpenMPRuntimeSpark::EmitSparkJob() {
   SPARK_FILE << "  }\n"
              << "\n"
              << "}\n";
+
+  llvm::errs() << ">> Spark code generated...\n";
 }
 
 void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     llvm::raw_fd_ostream &SPARK_FILE) {
+  llvm::errs() << "EmitSparkNativeKernel\n";
   bool verbose = VERBOSE;
 
   int i;
@@ -123,36 +343,51 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
   SPARK_FILE << "import org.apache.spark.SparkFiles\n";
   SPARK_FILE << "class OmpKernel {\n";
 
-  for (auto it = SparkMappingFunctions.begin();
-       it != SparkMappingFunctions.end(); it++) {
-    OMPSparkMappingInfo &info = **it;
+  llvm::errs() << "Mapping Native\n";
+  for (auto *info : SparkMappingFunctions) {
 
-    unsigned NbOutputs = info.OutVarDef.size() + info.InOutVarUse.size();
+    llvm::errs() << "--- MappingFunction ID = " << info->Identifier << "\n";
 
-    SPARK_FILE << "  @native def mappingMethod" << info.Identifier << "(";
+    auto &OMPLoop = info->OMPDirective;
+
+    llvm::errs() << "Native 1\n";
+    llvm::errs() << "NbOutput = " << info->Outputs.size() << " + "
+                 << info->InputsOutputs.size() << "\n";
+    unsigned NbOutputs = info->Outputs.size() + info->InputsOutputs.size();
+
+    llvm::errs() << "Native 2\n";
+    SPARK_FILE << "  @native def mappingMethod" << info->Identifier << "(";
     i = 0;
-    for (auto it = info.CounterUse.begin(); it != info.CounterUse.end();
-         ++it, i++) {
+    llvm::errs() << "Native 2.5\n";
+
+    for (auto I : info->OMPDirective.counters()) {
+      llvm::errs() << "Native 3\n";
+
       // Separator
-      if (it != info.CounterUse.begin())
+      if (i != 0)
         SPARK_FILE << ", ";
 
       SPARK_FILE << "index" << i << ": Long, bound" << i << ": Long";
+      i++;
     }
+    llvm::errs() << "Native 3.5\n";
+
     i = 0;
-    for (auto it = info.InVarUse.begin(); it != info.InVarUse.end();
+    for (auto it = info->InVarUse.begin(); it != info->InVarUse.end();
+         ++it, i++) {
+      llvm::errs() << "Native 4\n";
+
+      // Separator
+      SPARK_FILE << ", ";
+      SPARK_FILE << "n" << i << ": Array[Byte]";
+    }
+    for (auto it = info->InOutVarUse.begin(); it != info->InOutVarUse.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end();
-         ++it, i++) {
-      // Separator
-      SPARK_FILE << ", ";
-      SPARK_FILE << "n" << i << ": Array[Byte]";
-    }
-    for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end();
+    for (auto it = info->OutVarDef.begin(); it != info->OutVarDef.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
@@ -168,30 +403,33 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
       SPARK_FILE << "]";
     }
     SPARK_FILE << "\n";
-    SPARK_FILE << "  def mapping" << info.Identifier << "(";
+
+    llvm::errs() << "Mapping Native Loader\n";
+
+    SPARK_FILE << "  def mapping" << info->Identifier << "(";
     i = 0;
-    for (auto it = info.CounterUse.begin(); it != info.CounterUse.end();
+    for (auto it = OMPLoop.counters().begin(); it != OMPLoop.counters().end();
          ++it, i++) {
       // Separator
-      if (it != info.CounterUse.begin())
+      if (it != OMPLoop.counters().begin())
         SPARK_FILE << ", ";
 
       SPARK_FILE << "index" << i << ": Long, bound" << i << ": Long";
     }
     i = 0;
-    for (auto it = info.InVarUse.begin(); it != info.InVarUse.end();
+    for (auto it = info->InVarUse.begin(); it != info->InVarUse.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end();
+    for (auto it = info->InOutVarUse.begin(); it != info->InOutVarUse.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end();
+    for (auto it = info->OutVarDef.begin(); it != info->OutVarDef.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
@@ -208,30 +446,30 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     }
     SPARK_FILE << " = {\n";
     SPARK_FILE << "    NativeKernels.loadOnce()\n";
-    SPARK_FILE << "    return mappingMethod" << info.Identifier << "(";
+    SPARK_FILE << "    return mappingMethod" << info->Identifier << "(";
     i = 0;
-    for (auto it = info.CounterUse.begin(); it != info.CounterUse.end();
+    for (auto it = OMPLoop.counters().begin(); it != OMPLoop.counters().end();
          ++it, i++) {
       // Separator
-      if (it != info.CounterUse.begin())
+      if (it != OMPLoop.counters().begin())
         SPARK_FILE << ", ";
 
       SPARK_FILE << "index" << i << ", bound" << i;
     }
     i = 0;
-    for (auto it = info.InVarUse.begin(); it != info.InVarUse.end();
+    for (auto it = info->InVarUse.begin(); it != info->InVarUse.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
     }
-    for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end();
+    for (auto it = info->InOutVarUse.begin(); it != info->InOutVarUse.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
     }
-    for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end();
+    for (auto it = info->OutVarDef.begin(); it != info->OutVarDef.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
@@ -240,22 +478,29 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     SPARK_FILE << ")\n";
     SPARK_FILE << "  }\n\n";
 
-    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end(); ++it) {
-      SPARK_FILE << "  @native def reduceMethod" << (*it)->getName()
-                 << info.Identifier
-                 << "(n0 : Array[Byte], n1 : Array[Byte]) : Array[Byte]\n\n";
-    }
-    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end(); ++it) {
-      SPARK_FILE << "  def reduce" << (*it)->getName() << info.Identifier
-                 << "(n0 : Array[Byte], n1 : Array[Byte]) : Array[Byte]";
-      SPARK_FILE << " = {\n";
-      SPARK_FILE << "    NativeKernels.loadOnce()\n";
-      SPARK_FILE << "    return reduceMethod" << (*it)->getName()
-                 << info.Identifier << "(n0, n1)\n";
-      SPARK_FILE << "  }\n\n";
-    }
+    //    llvm::errs() << "Reduce Native\n";
+
+    //    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end();
+    //    ++it) {
+    //      SPARK_FILE << "  @native def reduceMethod" << (*it)->getName()
+    //                 << info.Identifier
+    //                 << "(n0 : Array[Byte], n1 : Array[Byte]) :
+    //                 Array[Byte]\n\n";
+    //    }
+    //    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end();
+    //    ++it) {
+    //      SPARK_FILE << "  def reduce" << (*it)->getName() << info.Identifier
+    //                 << "(n0 : Array[Byte], n1 : Array[Byte]) : Array[Byte]";
+    //      SPARK_FILE << " = {\n";
+    //      SPARK_FILE << "    NativeKernels.loadOnce()\n";
+    //      SPARK_FILE << "    return reduceMethod" << (*it)->getName()
+    //                 << info.Identifier << "(n0, n1)\n";
+    //      SPARK_FILE << "  }\n\n";
+    //    }
   }
   SPARK_FILE << "}\n\n";
+
+  llvm::errs() << "End Native Kernel\n";
 }
 
 class SparkExprPrinter : public ConstStmtVisitor<SparkExprPrinter> {
@@ -318,6 +563,8 @@ std::string CGOpenMPRuntimeSpark::getSparkVarName(const ValueDecl *VD) {
 }
 
 void CGOpenMPRuntimeSpark::EmitSparkInput(llvm::raw_fd_ostream &SPARK_FILE) {
+  llvm::errs() << "EmitSparkInput\n";
+
   bool verbose = VERBOSE;
   auto &IndexMap = OffloadingMapVarsIndex;
   auto &TypeMap = OffloadingMapVarsType;
@@ -373,9 +620,12 @@ void CGOpenMPRuntimeSpark::EmitSparkInput(llvm::raw_fd_ostream &SPARK_FILE) {
 void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
                                             OMPSparkMappingInfo &info,
                                             bool isLast) {
+  llvm::errs() << "EmitSparkMapping\n";
+
   bool verbose = VERBOSE;
   auto &IndexMap = OffloadingMapVarsIndex;
   auto &TypeMap = OffloadingMapVarsType;
+  auto &OMPLoop = info.OMPDirective;
   unsigned MappingId = info.Identifier;
   SparkExprPrinter MappingPrinter(SPARK_FILE, CGM.getContext(), info,
                                   "x.toInt");
@@ -385,40 +635,61 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
   SPARK_FILE << "    // 1 - Generate RDDs of index\n";
   int NbIndex = 0;
 
-  for (auto it = info.CounterInfo.begin(); it != info.CounterInfo.end(); ++it) {
-    const VarDecl *VarCnt = it->first;
-    const Expr *Init = it->second[0];
-    const Expr *Check = it->second[1];
-    const Expr *Step = it->second[2];
-    const Expr *CheckOp = it->second[3];
+  llvm::errs() << "Print bound, index and blocksize variables\n";
 
-    const BinaryOperator *BO = cast<BinaryOperator>(CheckOp);
+  for (auto it = OMPLoop.counters().begin(); it != OMPLoop.counters().end();
+       ++it) {
+    if (DeclRefExpr *CntExpr = dyn_cast_or_null<DeclRefExpr>(*it))
+      if (const VarDecl *CntDecl =
+              dyn_cast_or_null<VarDecl>(CntExpr->getDecl())) {
+        auto it_init = OMPLoop.counter_inits().begin();
+        auto it_step = OMPLoop.counter_steps().begin();
+        auto it_num = OMPLoop.counter_inits().begin();
 
-    SPARK_FILE << "    val bound_" << MappingId << "_" << NbIndex << " = ";
-    MappingPrinter.PrintExpr(Check);
-    SPARK_FILE << ".toLong\n";
-    SPARK_FILE << "    val blockSize_" << MappingId << "_" << NbIndex
-               << " = ((bound_" << MappingId << "_" << NbIndex
-               << ").toFloat/_parallelism).floor.toLong\n";
+        llvm::errs() << "TEST 1\n";
 
-    SPARK_FILE << "    val index_" << MappingId << "_" << NbIndex << " = (";
-    MappingPrinter.PrintExpr(Init);
-    SPARK_FILE << ".toLong to bound_" << MappingId << "_" << NbIndex;
-    if (BO->getOpcode() == BO_LT || BO->getOpcode() == BO_GT) {
-      SPARK_FILE << "-1";
-    }
-    SPARK_FILE << " by blockSize_" << MappingId << "_" << NbIndex << ")";
-    SPARK_FILE << " // Index " << VarCnt->getName() << "\n";
+        CntDecl->dump();
+        const Expr *Init = *it_init;
+        const Expr *Num = *it_num;
+        const Expr *Step = *it_step;
 
-    if (verbose) {
-      SPARK_FILE << "    println(\"XXXX DEBUG XXXX blockSize = "
-                    "\" + blockSize_"
-                 << MappingId << "_" << NbIndex << ")\n";
-      SPARK_FILE << "    println(\"XXXX DEBUG XXXX bound = \" + bound_"
-                 << MappingId << "_" << NbIndex << ")\n";
-    }
-    NbIndex++;
+        llvm::errs() << "TEST 2\n";
+
+        SPARK_FILE << "    val bound_" << MappingId << "_" << NbIndex << " = ";
+        MappingPrinter.PrintExpr(Init);
+        SPARK_FILE << " + ";
+        MappingPrinter.PrintExpr(Step);
+        SPARK_FILE << " * ";
+        MappingPrinter.PrintExpr(Num);
+        SPARK_FILE << ".toLong\n";
+
+        SPARK_FILE << "    val blockSize_" << MappingId << "_" << NbIndex
+                   << " = ((bound_" << MappingId << "_" << NbIndex
+                   << ").toFloat/_parallelism).floor.toLong\n";
+
+        llvm::errs() << "TEST 3\n";
+
+        SPARK_FILE << "    val index_" << MappingId << "_" << NbIndex << " = (";
+        MappingPrinter.PrintExpr(Init);
+        SPARK_FILE << ".toLong to bound_" << MappingId << "_" << NbIndex;
+        SPARK_FILE << " by blockSize_" << MappingId << "_" << NbIndex << ")";
+        SPARK_FILE << " // Index " << CntDecl->getName() << "\n";
+
+        llvm::errs() << "TEST 4\n";
+
+        if (verbose) {
+          SPARK_FILE << "    println(\"XXXX DEBUG XXXX blockSize = "
+                        "\" + blockSize_"
+                     << MappingId << "_" << NbIndex << ")\n";
+          SPARK_FILE << "    println(\"XXXX DEBUG XXXX bound = \" + bound_"
+                     << MappingId << "_" << NbIndex << ")\n";
+        }
+        NbIndex++;
+        it_init++, it_step++, it_num++;
+      }
   }
+
+  llvm::errs() << "Print construction of input RDDs\n";
 
   // We need to explicitly create Tuple1 if there is no ranged input.
   int NumberOfRangedInput = 0;
@@ -496,6 +767,8 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
   }
   SPARK_FILE << "}.toDS()\n"; // FIXME: Inverse with more indexes
 
+  llvm::errs() << "Print mapping operations \n";
+
   SPARK_FILE << "    // 2 - Perform Map operations\n";
   SPARK_FILE << "    val mapres_" << MappingId << " = index_" << MappingId
              << ".map{ x => (x._1, new OmpKernel().mapping" << MappingId << "(";
@@ -563,6 +836,8 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
     SPARK_FILE << "    mapres_" << MappingId << ".cache\n";
   }
 
+  llvm::errs() << "Print construction of the result\n";
+
   SPARK_FILE << "    // 3 - Merge back the results\n";
 
   i = 0;
@@ -590,12 +865,13 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
       // More than 3 outputs -> extract each variable from the Collection
       SPARK_FILE << ".map{ x => (x._1, x._2(" << i << ")) }";
     }
-    if (std::find(info.ReducedVar.begin(), info.ReducedVar.end(), VD) !=
-        info.ReducedVar.end())
-      SPARK_FILE << ".map{ x => x._2 }.reduce{(x, y) => new "
-                    "OmpKernel().reduce"
-                 << VD->getName() << MappingId << "(x, y)}";
-    else if (Range)
+    //    if (std::find(info.ReducedVar.begin(), info.ReducedVar.end(), VD) !=
+    //        info.ReducedVar.end())
+    //      SPARK_FILE << ".map{ x => x._2 }.reduce{(x, y) => new "
+    //                    "OmpKernel().reduce"
+    //                 << VD->getName() << MappingId << "(x, y)}";
+    //    else
+    if (Range)
       SPARK_FILE << ".collect()";
     else
       SPARK_FILE << ".map{ x => x._2 "
@@ -659,12 +935,13 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
       // More than 3 outputs -> extract each variable from the Collection
       SPARK_FILE << ".map{ x => (x._1, x._2(" << i << ")) }";
     }
-    if (std::find(info.ReducedVar.begin(), info.ReducedVar.end(), VD) !=
-        info.ReducedVar.end())
-      SPARK_FILE << ".map{ x => x._2 }.reduce{(x, y) => new "
-                    "OmpKernel().reduce"
-                 << VD->getName() << MappingId << "(x, y)}";
-    else if (Range)
+    //    if (std::find(info.ReducedVar.begin(), info.ReducedVar.end(), VD) !=
+    //        info.ReducedVar.end())
+    //      SPARK_FILE << ".map{ x => x._2 }.reduce{(x, y) => new "
+    //                    "OmpKernel().reduce"
+    //                 << VD->getName() << MappingId << "(x, y)}";
+    //    else
+    if (Range)
       SPARK_FILE << ".collect()";
     else
       SPARK_FILE << ".map{ x => x._2 "
@@ -704,6 +981,8 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
 }
 
 void CGOpenMPRuntimeSpark::EmitSparkOutput(llvm::raw_fd_ostream &SPARK_FILE) {
+  llvm::errs() << "EmitSparkOutput\n";
+
   auto &IndexMap = OffloadingMapVarsIndex;
   auto &TypeMap = OffloadingMapVarsType;
 
@@ -729,444 +1008,6 @@ Expr *CGOpenMPRuntimeSpark::ActOnIntegerConstant(SourceLocation Loc,
                                 CGM.getContext().IntTy, Loc);
 }
 
-namespace {
-class ForInitChecker : public StmtVisitor<ForInitChecker, Decl *> {
-  class ForInitVarChecker : public StmtVisitor<ForInitVarChecker, Decl *> {
-  public:
-    VarDecl *VisitDeclRefExpr(DeclRefExpr *E) {
-      return dyn_cast_or_null<VarDecl>(E->getDecl());
-    }
-    Decl *VisitStmt(Stmt *S) { return 0; }
-    ForInitVarChecker() {}
-  } VarChecker;
-  Expr *InitValue;
-
-public:
-  Decl *VisitBinaryOperator(BinaryOperator *BO) {
-    if (BO->getOpcode() != BO_Assign)
-      return 0;
-
-    InitValue = BO->getRHS();
-    return VarChecker.Visit(BO->getLHS());
-  }
-  Decl *VisitDeclStmt(DeclStmt *S) {
-    if (S->isSingleDecl()) {
-      VarDecl *Var = dyn_cast_or_null<VarDecl>(S->getSingleDecl());
-      if (Var && Var->hasInit()) {
-        if (CXXConstructExpr *Init =
-                dyn_cast<CXXConstructExpr>(Var->getInit())) {
-          if (Init->getNumArgs() != 1)
-            return 0;
-          InitValue = Init->getArg(0);
-        } else {
-          InitValue = Var->getInit();
-        }
-        return Var;
-      }
-    }
-    return 0;
-  }
-  Decl *VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
-    switch (E->getOperator()) {
-    case OO_Equal:
-      InitValue = E->getArg(1);
-      return VarChecker.Visit(E->getArg(0));
-    default:
-      break;
-    }
-    return 0;
-  }
-  Decl *VisitStmt(Stmt *S) { return 0; }
-  ForInitChecker() : VarChecker(), InitValue(0) {}
-  Expr *getInitValue() { return InitValue; }
-};
-
-class ForVarChecker : public StmtVisitor<ForVarChecker, bool> {
-  Decl *InitVar;
-
-public:
-  bool VisitDeclRefExpr(DeclRefExpr *E) { return E->getDecl() == InitVar; }
-  bool VisitImplicitCastExpr(ImplicitCastExpr *E) {
-    return Visit(E->getSubExpr());
-  }
-  bool VisitStmt(Stmt *S) { return false; }
-  ForVarChecker(Decl *D) : InitVar(D) {}
-};
-
-class ForTestChecker : public StmtVisitor<ForTestChecker, bool> {
-  ForVarChecker VarChecker;
-  Expr *CheckValue;
-  bool IsLessOp;
-  bool IsStrictOp;
-
-public:
-  bool VisitBinaryOperator(BinaryOperator *BO) {
-    if (!BO->isRelationalOp())
-      return false;
-    if (VarChecker.Visit(BO->getLHS())) {
-      CheckValue = BO->getRHS();
-      IsLessOp = BO->getOpcode() == BO_LT || BO->getOpcode() == BO_LE;
-      IsStrictOp = BO->getOpcode() == BO_LT || BO->getOpcode() == BO_GT;
-    } else if (VarChecker.Visit(BO->getRHS())) {
-      CheckValue = BO->getLHS();
-      IsLessOp = BO->getOpcode() == BO_GT || BO->getOpcode() == BO_GE;
-      IsStrictOp = BO->getOpcode() == BO_LT || BO->getOpcode() == BO_GT;
-    }
-    return CheckValue != 0;
-  }
-  bool VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
-    switch (E->getOperator()) {
-    case OO_Greater:
-    case OO_GreaterEqual:
-    case OO_Less:
-    case OO_LessEqual:
-      break;
-    default:
-      return false;
-    }
-    if (E->getNumArgs() != 2)
-      return false;
-
-    if (VarChecker.Visit(E->getArg(0))) {
-      CheckValue = E->getArg(1);
-      IsLessOp =
-          E->getOperator() == OO_Less || E->getOperator() == OO_LessEqual;
-      IsStrictOp = E->getOperator() == OO_Less;
-    } else if (VarChecker.Visit(E->getArg(1))) {
-      CheckValue = E->getArg(0);
-      IsLessOp =
-          E->getOperator() == OO_Greater || E->getOperator() == OO_GreaterEqual;
-      IsStrictOp = E->getOperator() == OO_Greater;
-    }
-
-    return CheckValue != 0;
-  }
-  bool VisitStmt(Stmt *S) { return false; }
-  ForTestChecker(Decl *D)
-      : VarChecker(D), CheckValue(0), IsLessOp(false), IsStrictOp(false) {}
-  Expr *getCheckValue() { return CheckValue; }
-  bool isLessOp() const { return IsLessOp; }
-  bool isStrictOp() const { return IsStrictOp; }
-};
-
-class ForIncrChecker : public StmtVisitor<ForIncrChecker, bool> {
-  ForVarChecker VarChecker;
-
-  Expr *ActOnIntegerConstant(SourceLocation Loc, uint64_t Val) {
-    unsigned IntSize = Context.getTargetInfo().getIntWidth();
-    return IntegerLiteral::Create(Context, llvm::APInt(IntSize, Val),
-                                  Context.IntTy, Loc);
-  }
-
-  class ForIncrExprChecker : public StmtVisitor<ForIncrExprChecker, bool> {
-    ForVarChecker VarChecker;
-    Expr *StepValue;
-    bool IsIncrement;
-
-  public:
-    bool VisitBinaryOperator(BinaryOperator *BO) {
-      if (!BO->isAdditiveOp())
-        return false;
-      if (BO->getOpcode() == BO_Add) {
-        IsIncrement = true;
-        if (VarChecker.Visit(BO->getLHS()))
-          StepValue = BO->getRHS();
-        else if (VarChecker.Visit(BO->getRHS()))
-          StepValue = BO->getLHS();
-        return StepValue != 0;
-      }
-      // BO_Sub
-      if (VarChecker.Visit(BO->getLHS()))
-        StepValue = BO->getRHS();
-      return StepValue != 0;
-    }
-    bool VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
-      switch (E->getOperator()) {
-      case OO_Plus:
-        IsIncrement = true;
-        if (VarChecker.Visit(E->getArg(0)))
-          StepValue = E->getArg(1);
-        else if (VarChecker.Visit(E->getArg(1)))
-          StepValue = E->getArg(0);
-        return StepValue != 0;
-      case OO_Minus:
-        if (VarChecker.Visit(E->getArg(0)))
-          StepValue = E->getArg(1);
-        return StepValue != 0;
-      default:
-        return false;
-      }
-    }
-    bool VisitStmt(Stmt *S) { return false; }
-    ForIncrExprChecker(ForVarChecker &C)
-        : VarChecker(C), StepValue(0), IsIncrement(false) {}
-    Expr *getStepValue() { return StepValue; }
-    bool isIncrement() const { return IsIncrement; }
-  } ExprChecker;
-  Expr *StepValue;
-  ASTContext &Context;
-  bool IsLessOp, IsCompatibleWithTest;
-
-public:
-  bool VisitUnaryOperator(UnaryOperator *UO) {
-    if (!UO->isIncrementDecrementOp())
-      return false;
-    if (VarChecker.Visit(UO->getSubExpr())) {
-      IsCompatibleWithTest = (IsLessOp && UO->isIncrementOp()) ||
-                             (!IsLessOp && UO->isDecrementOp());
-      if (!IsCompatibleWithTest && IsLessOp)
-        StepValue = ActOnIntegerConstant(SourceLocation(), -1);
-      else
-        StepValue = ActOnIntegerConstant(SourceLocation(), 1);
-    }
-    return StepValue != 0;
-  }
-  bool VisitBinaryOperator(BinaryOperator *BO) {
-    IsCompatibleWithTest = (IsLessOp && BO->getOpcode() == BO_AddAssign) ||
-                           (!IsLessOp && BO->getOpcode() == BO_SubAssign);
-    switch (BO->getOpcode()) {
-    case BO_AddAssign:
-    case BO_SubAssign:
-      if (VarChecker.Visit(BO->getLHS())) {
-        StepValue = BO->getRHS();
-        IsCompatibleWithTest = (IsLessOp && BO->getOpcode() == BO_AddAssign) ||
-                               (!IsLessOp && BO->getOpcode() == BO_SubAssign);
-      }
-      return StepValue != 0;
-    case BO_Assign:
-      if (VarChecker.Visit(BO->getLHS()) && ExprChecker.Visit(BO->getRHS())) {
-        StepValue = ExprChecker.getStepValue();
-        IsCompatibleWithTest = IsLessOp == ExprChecker.isIncrement();
-      }
-      return StepValue != 0;
-    default:
-      break;
-    }
-    return false;
-  }
-  bool VisitCXXOperatorCallExpr(CXXOperatorCallExpr *E) {
-    switch (E->getOperator()) {
-    case OO_PlusPlus:
-    case OO_MinusMinus:
-      if (VarChecker.Visit(E->getArg(0))) {
-        IsCompatibleWithTest = (IsLessOp && E->getOperator() == OO_PlusPlus) ||
-                               (!IsLessOp && E->getOperator() == OO_MinusMinus);
-        if (!IsCompatibleWithTest && IsLessOp)
-          StepValue = ActOnIntegerConstant(SourceLocation(), -1);
-        else
-          StepValue = ActOnIntegerConstant(SourceLocation(), 1);
-      }
-      return StepValue != 0;
-    case OO_PlusEqual:
-    case OO_MinusEqual:
-      if (VarChecker.Visit(E->getArg(0))) {
-        StepValue = E->getArg(1);
-        IsCompatibleWithTest = (IsLessOp && E->getOperator() == OO_PlusEqual) ||
-                               (!IsLessOp && E->getOperator() == OO_MinusEqual);
-      }
-      return StepValue != 0;
-    case OO_Equal:
-      if (VarChecker.Visit(E->getArg(0)) && ExprChecker.Visit(E->getArg(1))) {
-        StepValue = ExprChecker.getStepValue();
-        IsCompatibleWithTest = IsLessOp == ExprChecker.isIncrement();
-      }
-      return StepValue != 0;
-    default:
-      break;
-    }
-    return false;
-  }
-  bool VisitStmt(Stmt *S) { return false; }
-  ForIncrChecker(Decl *D, ASTContext &Context, bool LessOp)
-      : VarChecker(D), ExprChecker(VarChecker), StepValue(0), Context(Context),
-        IsLessOp(LessOp), IsCompatibleWithTest(false) {}
-  Expr *getStepValue() { return StepValue; }
-  bool isCompatibleWithTest() const { return IsCompatibleWithTest; }
-};
-} // namespace
-
-bool CGOpenMPRuntimeSpark::isNotSupportedLoopForm(
-    Stmt *S, OpenMPDirectiveKind Kind, Expr *&InitVal, Expr *&StepVal,
-    Expr *&CheckVal, VarDecl *&VarCnt, Expr *&CheckOp,
-    BinaryOperatorKind &OpKind) {
-  // assert(S && "non-null statement must be specified");
-  // OpenMP [2.9.5, Canonical Loop Form]
-  //  for (init-expr; test-expr; incr-expr) structured-block
-  OpKind = BO_Assign;
-  ForStmt *For = dyn_cast_or_null<ForStmt>(S);
-  if (!For) {
-    //    Diag(S->getLocStart(), diag::err_omp_not_for)
-    //        << getOpenMPDirectiveName(Kind);
-    return true;
-  }
-  Stmt *Body = For->getBody();
-  if (!Body) {
-    //    Diag(S->getLocStart(), diag::err_omp_directive_nonblock)
-    //        << getOpenMPDirectiveName(Kind);
-    return true;
-  }
-
-  // OpenMP [2.9.5, Canonical Loop Form]
-  //  init-expr One of the following:
-  //  var = lb
-  //  integer-type var = lb
-  //  random-access-iterator-type var = lb
-  //  pointer-type var = lb
-  ForInitChecker InitChecker;
-  Stmt *Init = For->getInit();
-  VarDecl *Var;
-  if (!Init || !(Var = dyn_cast_or_null<VarDecl>(InitChecker.Visit(Init)))) {
-    //    Diag(Init ? Init->getLocStart() : For->getForLoc(),
-    //         diag::err_omp_not_canonical_for)
-    //        << 0;
-    return true;
-  }
-  SourceLocation InitLoc = Init->getLocStart();
-
-  // OpenMP [2.11.1.1, Data-sharing Attribute Rules for Variables Referenced
-  // in a Construct, C/C++]
-  // The loop iteration variable(s) in the associated for-loop(s) of a for or
-  // parallel for construct may be listed in a private or lastprivate clause.
-  bool HasErrors = false;
-
-  // OpenMP [2.9.5, Canonical Loop Form]
-  // Var One of the following
-  // A variable of signed or unsigned integer type
-  // For C++, a variable of a random access iterator type.
-  // For C, a variable of a pointer type.
-  QualType Type = Var->getType()
-                      .getNonReferenceType()
-                      .getCanonicalType()
-                      .getUnqualifiedType();
-  if (!Type->isIntegerType() && !Type->isPointerType() &&
-      (!CGM.getLangOpts().CPlusPlus || !Type->isOverloadableType())) {
-    //    Diag(Init->getLocStart(), diag::err_omp_for_variable)
-    //        << getLangOpts().CPlusPlus;
-    HasErrors = true;
-  }
-
-  // OpenMP [2.9.5, Canonical Loop Form]
-  //  test-expr One of the following:
-  //  var relational-op b
-  //  b relational-op var
-  ForTestChecker TestChecker(Var);
-  Stmt *Cond = For->getCond();
-  CheckOp = cast<Expr>(Cond);
-  bool TestCheckCorrect = false;
-  if (!Cond || !(TestCheckCorrect = TestChecker.Visit(Cond))) {
-    //    Diag(Cond ? Cond->getLocStart() : For->getForLoc(),
-    //         diag::err_omp_not_canonical_for)
-    //        << 1;
-    HasErrors = true;
-  }
-
-  // OpenMP [2.9.5, Canonical Loop Form]
-  //  incr-expr One of the following:
-  //  ++var
-  //  var++
-  //  --var
-  //  var--
-  //  var += incr
-  //  var -= incr
-  //  var = var + incr
-  //  var = incr + var
-  //  var = var - incr
-  ForIncrChecker IncrChecker(Var, CGM.getContext(), TestChecker.isLessOp());
-  Stmt *Incr = For->getInc();
-  bool IncrCheckCorrect = false;
-  if (!Incr || !(IncrCheckCorrect = IncrChecker.Visit(Incr))) {
-    //    Diag(Incr ? Incr->getLocStart() : For->getForLoc(),
-    //         diag::err_omp_not_canonical_for)
-    //        << 2;
-    HasErrors = true;
-  }
-
-  // OpenMP [2.9.5, Canonical Loop Form]
-  //  lb and b Loop invariant expressions of a type compatible with the type
-  //  of var.
-  Expr *InitValue = InitChecker.getInitValue();
-  //  QualType InitTy =
-  //    InitValue ? InitValue->getType().getNonReferenceType().
-  //                                  getCanonicalType().getUnqualifiedType() :
-  //                QualType();
-  //  if (InitValue &&
-  //      Context.mergeTypes(Type, InitTy, false, true).isNull()) {
-  //    Diag(InitValue->getExprLoc(), diag::err_omp_for_type_not_compatible)
-  //      << InitValue->getType()
-  //      << Var << Var->getType();
-  //    HasErrors = true;
-  //  }
-  Expr *CheckValue = TestChecker.getCheckValue();
-  //  QualType CheckTy =
-  //    CheckValue ? CheckValue->getType().getNonReferenceType().
-  //                                  getCanonicalType().getUnqualifiedType() :
-  //                 QualType();
-  //  if (CheckValue &&
-  //      Context.mergeTypes(Type, CheckTy, false, true).isNull()) {
-  //    Diag(CheckValue->getExprLoc(), diag::err_omp_for_type_not_compatible)
-  //      << CheckValue->getType()
-  //      << Var << Var->getType();
-  //    HasErrors = true;
-  //  }
-
-  // OpenMP [2.9.5, Canonical Loop Form]
-  //  incr A loop invariant integer expression.
-  Expr *Step = IncrChecker.getStepValue();
-  if (Step && !Step->getType()->isIntegralOrEnumerationType()) {
-    //    Diag(Step->getExprLoc(), diag::err_omp_for_incr_not_integer);
-    HasErrors = true;
-  }
-
-  // OpenMP [2.9.5, Canonical Loop Form, Restrictions]
-  //  If test-expr is of form var relational-op b and relational-op is < or
-  //  <= then incr-expr must cause var to increase on each iteration of the
-  //  loop. If test-expr is of form var relational-op b and relational-op is
-  //  > or >= then incr-expr must cause var to decrease on each iteration of the
-  //  loop.
-  //  If test-expr is of form b relational-op var and relational-op is < or
-  //  <= then incr-expr must cause var to decrease on each iteration of the
-  //  loop. If test-expr is of form b relational-op var and relational-op is
-  //  > or >= then incr-expr must cause var to increase on each iteration of the
-  //  loop.
-  if (Incr && TestCheckCorrect && IncrCheckCorrect &&
-      !IncrChecker.isCompatibleWithTest()) {
-    // Additional type checking.
-    llvm::APSInt Result;
-    bool IsConst = Step->isIntegerConstantExpr(Result, CGM.getContext());
-    bool IsConstNeg = IsConst && Result.isSigned() && Result.isNegative();
-    bool IsSigned = Step->getType()->hasSignedIntegerRepresentation();
-    if ((TestChecker.isLessOp() && IsConst && IsConstNeg) ||
-        (!TestChecker.isLessOp() &&
-         ((IsConst && !IsConstNeg) || (!IsConst && !IsSigned)))) {
-      //      Diag(Incr->getLocStart(), diag::err_omp_for_incr_not_compatible)
-      //          << Var << TestChecker.isLessOp();
-      HasErrors = true;
-    } else {
-      // TODO: Negative increment
-      // Step = CreateBuiltinUnaryOp(Step->getExprLoc(), UO_Minus, Step);
-    }
-  }
-  if (HasErrors)
-    return true;
-
-  assert(Step && "Null expr in Step in OMP FOR");
-  Step = Step->IgnoreParenImpCasts();
-  CheckValue = CheckValue->IgnoreParenImpCasts();
-  InitValue = InitValue->IgnoreParenImpCasts();
-
-  //  if (TestChecker.isStrictOp()) {
-  //    Diff = BuildBinOp(DSAStack->getCurScope(), InitLoc, BO_Sub, CheckValue,
-  //                      ActOnIntegerConstant(SourceLocation(), 1));
-  //  }
-
-  InitVal = InitValue;
-  CheckVal = CheckValue;
-  StepVal = Step;
-  VarCnt = Var;
-
-  return false;
-}
-
 /// A StmtVisitor that propagates the raw counts through the AST and
 /// records the count at statements where the value may change.
 class FindKernelArguments : public RecursiveASTVisitor<FindKernelArguments> {
@@ -1177,9 +1018,6 @@ private:
 
   llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
       MapVarToExpr;
-  llvm::SmallSet<const VarDecl *, 8> Inputs;
-  llvm::SmallSet<const VarDecl *, 8> Outputs;
-  llvm::SmallSet<const VarDecl *, 8> InputsOutputs;
 
   enum UseKind { Use, Def, UseDef };
 
@@ -1206,21 +1044,21 @@ public:
     TraverseStmt(S);
 
     llvm::errs() << "Inputs =";
-    for (auto In : Inputs) {
+    for (auto In : Info->Inputs) {
       Info->InVarUse[In].append(MapVarToExpr[In].begin(),
                                 MapVarToExpr[In].end());
       llvm::errs() << " " << In->getName();
     }
     llvm::errs() << "\n";
     llvm::errs() << "Outputs =";
-    for (auto Out : Outputs) {
+    for (auto Out : Info->Outputs) {
       Info->OutVarDef[Out].append(MapVarToExpr[Out].begin(),
                                   MapVarToExpr[Out].end());
       llvm::errs() << " " << Out->getName();
     }
     llvm::errs() << "\n";
     llvm::errs() << "InputsOutputs =";
-    for (auto InOut : InputsOutputs) {
+    for (auto InOut : Info->InputsOutputs) {
       Info->InOutVarUse[InOut].append(MapVarToExpr[InOut].begin(),
                                       MapVarToExpr[InOut].end());
       llvm::errs() << " " << InOut->getName();
@@ -1386,13 +1224,13 @@ public:
         MapType = SparkRuntime.getMapType(VD);
       }
 
-      bool currInput =
-          std::find(Inputs.begin(), Inputs.end(), VD) != Inputs.end();
-      bool currOutput =
-          std::find(Outputs.begin(), Outputs.end(), VD) != Outputs.end();
+      bool currInput = std::find(Info->Inputs.begin(), Info->Inputs.end(),
+                                 VD) != Info->Inputs.end();
+      bool currOutput = std::find(Info->Outputs.begin(), Info->Outputs.end(),
+                                  VD) != Info->Outputs.end();
       bool currInputOutput =
-          std::find(InputsOutputs.begin(), InputsOutputs.end(), VD) !=
-          InputsOutputs.end();
+          std::find(Info->InputsOutputs.begin(), Info->InputsOutputs.end(),
+                    VD) != Info->InputsOutputs.end();
 
       MapVarToExpr[VD].push_back(D);
 
@@ -1402,10 +1240,10 @@ public:
         if (currInputOutput) {
           ;
         } else if (currOutput) {
-          Outputs.erase(VD);
-          InputsOutputs.insert(VD);
+          Info->Outputs.erase(VD);
+          Info->InputsOutputs.insert(VD);
         } else {
-          Inputs.insert(VD);
+          Info->Inputs.insert(VD);
         }
       } else if (current_use == Def) {
         if (verbose)
@@ -1413,17 +1251,17 @@ public:
         if (currInputOutput) {
           ;
         } else if (currInput) {
-          Inputs.erase(VD);
-          InputsOutputs.insert(VD);
+          Info->Inputs.erase(VD);
+          Info->InputsOutputs.insert(VD);
         } else {
-          Outputs.insert(VD);
+          Info->Outputs.insert(VD);
         }
       } else if (current_use == UseDef) {
         if (verbose)
           llvm::errs() << " is UseDef";
-        Inputs.erase(VD);
-        Outputs.erase(VD);
-        InputsOutputs.insert(VD);
+        Info->Inputs.erase(VD);
+        Info->Outputs.erase(VD);
+        Info->InputsOutputs.insert(VD);
       } else {
         if (verbose)
           llvm::errs() << " is Nothing ???";
@@ -1817,12 +1655,10 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
   }
 }
 
-void CGOpenMPRuntimeSpark::GenerateMappingKernel(
-    const OMPExecutableDirective &S) {
+llvm::Function *
+CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
 
   llvm::errs() << "GenerateMappingKernel\n";
-
-  BuildJNITy();
 
   bool verbose = VERBOSE;
 
@@ -1832,20 +1668,20 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
   const OMPParallelForDirective &ForDirective =
       cast<OMPParallelForDirective>(S);
 
-  DefineJNITypes();
-
-  for (ArrayRef<OMPClause *>::const_iterator I = S.clauses().begin(),
-                                             E = S.clauses().end();
-       I != E; ++I)
-    if (*I && (*I)->getClauseKind() == OMPC_reduction)
-      GenerateReductionKernel(cast<OMPReductionClause>(*(*I)), S);
+  //  for (ArrayRef<OMPClause *>::const_iterator I = S.clauses().begin(),
+  //                                             E = S.clauses().end();
+  //       I != E; ++I)
+  //    if (*I && (*I)->getClauseKind() == OMPC_reduction)
+  //      GenerateReductionKernel(cast<OMPReductionClause>(*(*I)), S);
 
   auto &typeMap = OffloadingMapVarsType;
   auto &indexMap = OffloadingMapVarsIndex;
 
   // FIXME: what about several functions
-  OMPSparkMappingInfo info;
+  OMPSparkMappingInfo info(ForDirective);
   SparkMappingFunctions.push_back(&info);
+
+  llvm::errs() << "--- MappingFunction ID = " << info.Identifier << "\n";
 
   if (verbose)
     llvm::errs() << "Offloaded variables \n";
@@ -1882,29 +1718,28 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
 
     // Detect info of the loop counter
 
-    Expr *Step;
-    Expr *Check;
-    Expr *Init;
-    VarDecl *VarCnt;
-    Expr *CheckOp;
-    BinaryOperatorKind OpKind;
-
-    isNotSupportedLoopForm(LoopStmt, S.getDirectiveKind(), Init, Step, Check,
-                           VarCnt, CheckOp, OpKind);
-
-    if (verbose)
-      llvm::errs() << "Find counter " << VarCnt->getName() << "\n";
-
-    auto &CntInfo = info.CounterInfo[VarCnt];
-    CntInfo.push_back(Init);
-    CntInfo.push_back(Check);
-    CntInfo.push_back(Step);
-    CntInfo.push_back(CheckOp);
+    if (DeclRefExpr *CntExpr =
+            dyn_cast_or_null<DeclRefExpr>(ForDirective.counters().front()))
+      if (const VarDecl *CntDecl =
+              dyn_cast_or_null<VarDecl>(CntExpr->getDecl()))
+        if (verbose) {
+          llvm::errs() << "Find counter " << CntDecl->getName() << "\n";
+          auto &CntInfo = info.CounterInfo[CntDecl];
+          CntDecl->dump();
+          CntInfo.push_back(ForDirective.counter_inits().front());
+          llvm::errs() << "== INIT =\n";
+          llvm::errs() << ForDirective.counter_inits().size() << "\n";
+          ForDirective.counter_inits().front()->dump();
+          llvm::errs() << "== COND =\n";
+          ForDirective.counter_num_iterations().front()->dump();
+          llvm::errs() << "== INC =\n";
+          ForDirective.counter_steps().front()->dump();
+        }
 
     Body = For->getBody();
   }
 
-  For->dump();
+  // For->dump();
 
   // Create the mapping function
 
@@ -1913,6 +1748,10 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
   // Detect input/output expression from the loop body
   FindKernelArguments Finder(CGM, *this, &info);
   Finder.Explore(LoopStmt);
+
+  llvm::errs() << "-- SIZE1 = " << info.Outputs.size() << "\n";
+  llvm::errs() << "-- SIZE2 = " << SparkMappingFunctions.back()->Outputs.size() << "\n";
+
 
   // Initialize arguments
   FunctionArgList ArgList;
@@ -1959,19 +1798,13 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
   CGM.SetInternalFunctionAttributes(/*D=*/nullptr, Fn, FnInfo);
   CodeGenFunction CGF(CGM);
   CGF.disableDebugInfo();
-  CGF.StartFunction(GlobalDecl(), Ctx.VoidTy, Fn, FnInfo, ArgList);
+  CGF.StartFunction(GlobalDecl(), jobjectQTy, Fn, FnInfo, ArgList);
 
   auto &Bld = CGF.Builder;
 
   // Generate useful type and constant"
   llvm::PointerType *PointerTy_Int8 =
       llvm::PointerType::get(Bld.getInt8Ty(), 0);
-
-  llvm::ConstantInt *const_int32_0 = llvm::ConstantInt::get(
-      CGM.getLLVMContext(), llvm::APInt(32, llvm::StringRef("0"), 10));
-  llvm::ConstantInt *const_int32_2 = llvm::ConstantInt::get(
-      CGM.getLLVMContext(), llvm::APInt(32, llvm::StringRef("2"), 10));
-
   llvm::ConstantPointerNull *const_ptr_null =
       llvm::ConstantPointerNull::get(PointerTy_Int8);
 
@@ -2022,12 +1855,18 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
 
   for (auto it = info.CounterUse.begin(); it != info.CounterUse.end(); ++it) {
     const VarDecl *VD = it->first;
+    QualType CntQTy = VD->getType();
+    llvm::Type *CntTy = CGM.getTypes().ConvertType(CntQTy);
 
     // Get current value of the loop counter
     // FIXME: Should we cast ??
     AddrCntArg = CGF.GetAddrOfLocalVar(*ArgsIt);
     CntVal = CGF.EmitLoadOfScalar(AddrCntArg, /*Volatile=*/false, Ctx.IntTy,
                                   SourceLocation());
+    Address AddrCnt = CGF.CreateDefaultAlignTempAlloca(CntTy, VD->getName());
+    CGF.EmitStoreOfScalar(Bld.CreateIntCast(CntVal, CntTy, false), AddrCnt,
+                          /*Volatile=*/false, CntQTy);
+
     ArgsIt++;
 
     // Get current value of the loop bound
@@ -2036,7 +1875,7 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     CntBoundVal = CGF.EmitLoadOfScalar(AddrCntBoundArg, /*Volatile=*/false,
                                        Ctx.IntTy, SourceLocation());
 
-    addOpenMPKernelArgVar(VD, CntVal);
+    addOpenMPKernelArgVar(VD, AddrCnt.getPointer());
     ArgsIt++;
   }
 
@@ -2182,101 +2021,70 @@ void CGOpenMPRuntimeSpark::GenerateMappingKernel(
     ++ArgsIt;
   }
 
-  // JumpDest LoopExit = CGF.getJumpDestInCurrentScope("for.end");
-
-  // Evaluate the first part before the loop.
-  if (For->getInit())
-    CGF.EmitStmt(For->getInit());
-
-  // Start the loop with a block that tests the condition.
-  // If there's an increment, the continue scope will be overwritten
-  // later.
-  llvm::BasicBlock *CondBlock = CGF.createBasicBlock("for.cond");
-  llvm::BasicBlock *Continue = CGF.createBasicBlock("for.cont");
-  CGF.EmitBlock(Continue);
-
-  llvm::BasicBlock *ExitBlock = CGF.createBasicBlock("for.end");
-  llvm::BasicBlock *ForBody = CGF.createBasicBlock("for.body");
-
-  // If the for loop doesn't have an increment we can just use the
-  // condition as the continue block.  Otherwise we'll need to create
-  // a block for it (in the current scope, i.e. in the scope of the
-  // condition), and that we will become our continue block.
-  if (For->getInc())
-    Continue = CGF.createBasicBlock("for.inc");
-
-  if (For->getCond()) {
-    // If the for statement has a condition scope, emit the local variable
-    // declaration.
-    if (For->getConditionVariable()) {
-      CGF.EmitAutoVarDecl(*For->getConditionVariable());
-    }
-
-    // C99 6.8.5p2/p4: The first substatement is executed if the expression
-    // compares unequal to 0.  The condition must be a scalar type.
-
-    llvm::Value *Cond = Bld.CreateICmpULE(
-        CGF.EmitLoadOfScalar(AddrCntArg, /*Volatile=*/false, Ctx.IntTy,
-                             SourceLocation()),
-        CGF.EmitLoadOfScalar(AddrCntBoundArg, /*Volatile=*/false, Ctx.IntTy,
-                             SourceLocation()));
-
-    Bld.CreateCondBr(Cond, ForBody, ExitBlock);
-
-    CGF.EmitBlock(ExitBlock);
-
-    CGF.EmitBlock(ForBody);
-  }
-
   {
     // FIXME: CGM.OpenMPSupport.startSparkRegion();
     // Create a separate cleanup scope for the body, in case it is not
     // a compound statement.
 
     // Generate kernel code
-    llvm::errs() << "Start emitting Loop body\n";
-    CGF.EmitStmt(Body);
-    llvm::errs() << "End of Loop body\n";
+    // FIXME: Change the condition
+    llvm::errs() << "Start emitting Loop\n";
+
+    // Create a separate cleanup scope for the body, in case it is not
+    // a compound statement.
+    CodeGenFunction::RunCleanupsScope BodyScope(CGF);
+
+    // Generate kernel code
+    if (const CompoundStmt *S = dyn_cast<CompoundStmt>(Body))
+      CGF.EmitCompoundStmtWithoutScope(*S);
+    else
+      CGF.EmitStmt(Body);
+
+    llvm::errs() << "End of Loop\n";
 
     // FIXME: CGM.OpenMPSupport.stopSparkRegion();
   }
 
-  // If there is an increment, emit it next.
-  if (For->getInc()) {
-    CGF.EmitBlock(Continue);
-    CGF.EmitStmt(For->getInc());
-  }
-
-  CGF.EmitBranch(CondBlock);
-
-  // Emit the fall-through block.
-  CGF.EmitBlock(ExitBlock, true);
-
+  llvm::errs() << "Release bytearrays\n";
   // Release JNI arrays
   for (auto it = InputsToRelease.begin(); it != InputsToRelease.end(); ++it)
     EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
-                                         const_int32_2);
+                                         CGF.Builder.getInt32(2));
   for (auto it = ScalarInputsToRelease.begin();
        it != ScalarInputsToRelease.end(); ++it)
-    EmitJNIReleaseByteArrayElements(CGF, it->first, it->second, const_int32_2);
+    EmitJNIReleaseByteArrayElements(CGF, it->first, it->second,
+                                    CGF.Builder.getInt32(2));
   for (auto it = OutputsToRelease.begin(); it != OutputsToRelease.end(); ++it)
     EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
-                                         const_int32_0);
+                                         CGF.Builder.getInt32(0));
   for (auto it = InOutputsToRelease.begin(); it != InOutputsToRelease.end();
        ++it)
     EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
-                                         const_int32_0);
+                                         CGF.Builder.getInt32(0));
+
+  llvm::errs() << "Building outputs\n";
 
   int NbOutputs = info.OutVarDef.size() + info.InOutVarUse.size();
 
+  // Returning the output
+  llvm::Value *retValue = nullptr;
+
   if (NbOutputs == 1) {
     // Just return the ByteArray
-    Bld.CreateRet(OutputsToReturn.front());
+    retValue = OutputsToReturn.front();
   } else if (NbOutputs > 1) {
-    EmitJNICreateNewTuple(CGF, OutputsToReturn);
+    retValue = EmitJNICreateNewTuple(CGF, OutputsToReturn);
   } else {
     llvm::errs() << "WARNING OmpCloud: There is not output variable\n";
   }
 
+  llvm::errs() << "Storing result\n";
+  Bld.CreateStore(retValue, CGF.ReturnValue);
+
+  llvm::errs() << "Finishing function\n";
   CGF.FinishFunction();
+
+  llvm::errs() << "END of Mapping function CodeGen\n";
+
+  return Fn;
 }
