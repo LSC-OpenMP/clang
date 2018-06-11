@@ -103,8 +103,10 @@ public:
       unsigned CaptureLevel = 1, unsigned ImplicitParamStop = 0,
       bool NonAliasedMaps = false);
 
-  struct OMPSparkMappingInfo {
-    const OMPLoopDirective OMPDirective;
+  class OMPSparkMappingInfo {
+  public:
+
+    const OMPLoopDirective *OMPDirective;
     llvm::SmallSet<const VarDecl *, 8> Inputs;
     llvm::SmallSet<const VarDecl *, 8> Outputs;
     llvm::SmallSet<const VarDecl *, 8> InputsOutputs;
@@ -124,14 +126,16 @@ public:
     llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 4>>
         CounterInfo;
     llvm::DenseMap<const VarDecl *, llvm::Value *> KernelArgVars;
-    unsigned Identifier;
-    OMPSparkMappingInfo(const OMPLoopDirective Directive) : OMPDirective(Directive) {
+    const int Identifier;
+    static int _NextId;
+
+    OMPSparkMappingInfo(const OMPLoopDirective *Directive) : OMPDirective(Directive), Identifier(_NextId++) {
     }
     ~OMPSparkMappingInfo() {}
   };
 
   unsigned CurrentIdentifier = 0;
-  llvm::SmallVector<OMPSparkMappingInfo *, 16> SparkMappingFunctions;
+  llvm::SmallVector<OMPSparkMappingInfo, 16> SparkMappingFunctions;
 
   bool ShouldAccessJNIArgs = false;
 
@@ -217,15 +221,15 @@ public:
   void addOpenMPKernelArgVar(const VarDecl *VD, llvm::Value *Addr) {
     assert(!SparkMappingFunctions.empty() &&
            "OpenMP private variables region is not started.");
-    SparkMappingFunctions.back()->KernelArgVars[VD] = Addr;
+    SparkMappingFunctions.back().KernelArgVars[VD] = Addr;
   }
   void addOpenMPKernelArgRange(const Expr *E, llvm::Value *Addr) {
-    SparkMappingFunctions.back()->RangeIndexes[E] = Addr;
+    SparkMappingFunctions.back().RangeIndexes[E] = Addr;
   }
   void delOpenMPKernelArgVar(const VarDecl *VD) {
     assert(!SparkMappingFunctions.empty() &&
            "OpenMP private variables region is not started.");
-    SparkMappingFunctions.back()->KernelArgVars[VD] = 0;
+    SparkMappingFunctions.back().KernelArgVars[VD] = 0;
   }
   void addOffloadingMapVariable(const ValueDecl *VD, unsigned Type) {
     OffloadingMapVarsType[VD] = Type;
@@ -237,14 +241,14 @@ public:
   llvm::Value *getOpenMPKernelArgVar(const VarDecl *VD) {
     if (SparkMappingFunctions.empty()) return 0;
     llvm::errs() << "Look for " << VD->getNameAsString() << "\n";
-    return SparkMappingFunctions.back()->KernelArgVars[VD];
+    return SparkMappingFunctions.back().KernelArgVars[VD];
   }
   /// \brief Checks, if the specified variable is currently an argument.
   /// \return 0 if the variable is not an argument, or address of the arguments
   /// otherwise.
   llvm::Value *getOpenMPKernelArgRange(const Expr *VarExpr) {
     if (SparkMappingFunctions.empty()) return 0;
-    return SparkMappingFunctions.back()->RangeIndexes[VarExpr];
+    return SparkMappingFunctions.back().RangeIndexes[VarExpr];
   }
 };
 

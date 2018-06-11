@@ -141,6 +141,9 @@ private:
 };
 } // namespace
 
+
+int CGOpenMPRuntimeSpark::OMPSparkMappingInfo::_NextId = 0;
+
 CGOpenMPRuntimeSpark::CGOpenMPRuntimeSpark(CodeGenModule &CGM)
     : CGOpenMPRuntime(CGM) {
   llvm::errs() << "CGOpenMPRuntimeSpark\n";
@@ -319,8 +322,8 @@ void CGOpenMPRuntimeSpark::EmitSparkJob() {
 
   for (auto it = SparkMappingFunctions.begin();
        it != SparkMappingFunctions.end(); it++) {
-    llvm::errs() << "SparkMappingFunctions " << (*it)->Identifier << "\n";
-    EmitSparkMapping(SPARK_FILE, **it, (it + 1) == SparkMappingFunctions.end());
+    llvm::errs() << "SparkMappingFunctions " << (*it).Identifier << "\n";
+    EmitSparkMapping(SPARK_FILE, *it, (it + 1) == SparkMappingFunctions.end());
   }
 
   EmitSparkOutput(SPARK_FILE);
@@ -343,24 +346,26 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
   SPARK_FILE << "import org.apache.spark.SparkFiles\n";
   SPARK_FILE << "class OmpKernel {\n";
 
+  llvm::errs() << "--- MappingFunction Size = " << SparkMappingFunctions.size() << "\n";
+
   llvm::errs() << "Mapping Native\n";
-  for (auto *info : SparkMappingFunctions) {
+  for (OMPSparkMappingInfo& info : SparkMappingFunctions) {
 
-    llvm::errs() << "--- MappingFunction ID = " << info->Identifier << "\n";
+    llvm::errs() << "--- MappingFunction ID = " << info.Identifier << "\n";
 
-    auto &OMPLoop = info->OMPDirective;
+    const OMPLoopDirective *OMPLoop = info.OMPDirective;
 
     llvm::errs() << "Native 1\n";
-    llvm::errs() << "NbOutput = " << info->Outputs.size() << " + "
-                 << info->InputsOutputs.size() << "\n";
-    unsigned NbOutputs = info->Outputs.size() + info->InputsOutputs.size();
+    llvm::errs() << "NbOutput = " << info.Outputs.size() << " + "
+                 << info.InputsOutputs.size() << "\n";
+    unsigned NbOutputs = info.Outputs.size() + info.InputsOutputs.size();
 
     llvm::errs() << "Native 2\n";
-    SPARK_FILE << "  @native def mappingMethod" << info->Identifier << "(";
+    SPARK_FILE << "  @native def mappingMethod" << info.Identifier << "(";
     i = 0;
-    llvm::errs() << "Native 2.5\n";
+    llvm::errs() << "Native 2.5.. NbCnt = " <<     OMPLoop->counters().size() << "\n";
 
-    for (auto I : info->OMPDirective.counters()) {
+    for (auto I : OMPLoop->counters()) {
       llvm::errs() << "Native 3\n";
 
       // Separator
@@ -373,7 +378,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     llvm::errs() << "Native 3.5\n";
 
     i = 0;
-    for (auto it = info->InVarUse.begin(); it != info->InVarUse.end();
+    for (auto it = info.Inputs.begin(); it != info.Inputs.end();
          ++it, i++) {
       llvm::errs() << "Native 4\n";
 
@@ -381,13 +386,13 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info->InOutVarUse.begin(); it != info->InOutVarUse.end();
+    for (auto it = info.InputsOutputs.begin(); it != info.InputsOutputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info->OutVarDef.begin(); it != info->OutVarDef.end();
+    for (auto it = info.Outputs.begin(); it != info.Outputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
@@ -406,30 +411,30 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
 
     llvm::errs() << "Mapping Native Loader\n";
 
-    SPARK_FILE << "  def mapping" << info->Identifier << "(";
+    SPARK_FILE << "  def mapping" << info.Identifier << "(";
     i = 0;
-    for (auto it = OMPLoop.counters().begin(); it != OMPLoop.counters().end();
+    for (auto it = OMPLoop->counters().begin(); it != OMPLoop->counters().end();
          ++it, i++) {
       // Separator
-      if (it != OMPLoop.counters().begin())
+      if (it != OMPLoop->counters().begin())
         SPARK_FILE << ", ";
 
       SPARK_FILE << "index" << i << ": Long, bound" << i << ": Long";
     }
     i = 0;
-    for (auto it = info->InVarUse.begin(); it != info->InVarUse.end();
+    for (auto it = info.Inputs.begin(); it != info.Inputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info->InOutVarUse.begin(); it != info->InOutVarUse.end();
+    for (auto it = info.InputsOutputs.begin(); it != info.InputsOutputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info->OutVarDef.begin(); it != info->OutVarDef.end();
+    for (auto it = info.Outputs.begin(); it != info.Outputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
@@ -446,30 +451,30 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     }
     SPARK_FILE << " = {\n";
     SPARK_FILE << "    NativeKernels.loadOnce()\n";
-    SPARK_FILE << "    return mappingMethod" << info->Identifier << "(";
+    SPARK_FILE << "    return mappingMethod" << info.Identifier << "(";
     i = 0;
-    for (auto it = OMPLoop.counters().begin(); it != OMPLoop.counters().end();
+    for (auto it = OMPLoop->counters().begin(); it != OMPLoop->counters().end();
          ++it, i++) {
       // Separator
-      if (it != OMPLoop.counters().begin())
+      if (it != OMPLoop->counters().begin())
         SPARK_FILE << ", ";
 
       SPARK_FILE << "index" << i << ", bound" << i;
     }
     i = 0;
-    for (auto it = info->InVarUse.begin(); it != info->InVarUse.end();
+    for (auto it = info.Inputs.begin(); it != info.Inputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
     }
-    for (auto it = info->InOutVarUse.begin(); it != info->InOutVarUse.end();
+    for (auto it = info.InputsOutputs.begin(); it != info.InputsOutputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
     }
-    for (auto it = info->OutVarDef.begin(); it != info->OutVarDef.end();
+    for (auto it = info.Outputs.begin(); it != info.Outputs.end();
          ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
@@ -625,7 +630,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
   bool verbose = VERBOSE;
   auto &IndexMap = OffloadingMapVarsIndex;
   auto &TypeMap = OffloadingMapVarsType;
-  auto &OMPLoop = info.OMPDirective;
+  const OMPLoopDirective *OMPLoop = info.OMPDirective;
   unsigned MappingId = info.Identifier;
   SparkExprPrinter MappingPrinter(SPARK_FILE, CGM.getContext(), info,
                                   "x.toInt");
@@ -637,14 +642,14 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
 
   llvm::errs() << "Print bound, index and blocksize variables\n";
 
-  for (auto it = OMPLoop.counters().begin(); it != OMPLoop.counters().end();
+  for (auto it = OMPLoop->counters().begin(); it != OMPLoop->counters().end();
        ++it) {
     if (DeclRefExpr *CntExpr = dyn_cast_or_null<DeclRefExpr>(*it))
       if (const VarDecl *CntDecl =
               dyn_cast_or_null<VarDecl>(CntExpr->getDecl())) {
-        auto it_init = OMPLoop.counter_inits().begin();
-        auto it_step = OMPLoop.counter_steps().begin();
-        auto it_num = OMPLoop.counter_inits().begin();
+        auto it_init = OMPLoop->counter_inits().begin();
+        auto it_step = OMPLoop->counter_steps().begin();
+        auto it_num = OMPLoop->counter_inits().begin();
 
         llvm::errs() << "TEST 1\n";
 
@@ -1030,10 +1035,10 @@ public:
 
   llvm::SmallVector<VarDecl *, 8> LocalVars;
 
-  CGOpenMPRuntimeSpark::OMPSparkMappingInfo *Info;
+  CGOpenMPRuntimeSpark::OMPSparkMappingInfo &Info;
 
   FindKernelArguments(CodeGenModule &CGM, CGOpenMPRuntimeSpark &SparkRuntime,
-                      CGOpenMPRuntimeSpark::OMPSparkMappingInfo *Info)
+                      CGOpenMPRuntimeSpark::OMPSparkMappingInfo &Info)
       : CGM(CGM), SparkRuntime(SparkRuntime), Info(Info) {
     verbose = VERBOSE;
     CurrArrayExpr = NULL;
@@ -1044,22 +1049,22 @@ public:
     TraverseStmt(S);
 
     llvm::errs() << "Inputs =";
-    for (auto In : Info->Inputs) {
-      Info->InVarUse[In].append(MapVarToExpr[In].begin(),
+    for (auto In : Info.Inputs) {
+      Info.InVarUse[In].append(MapVarToExpr[In].begin(),
                                 MapVarToExpr[In].end());
       llvm::errs() << " " << In->getName();
     }
     llvm::errs() << "\n";
     llvm::errs() << "Outputs =";
-    for (auto Out : Info->Outputs) {
-      Info->OutVarDef[Out].append(MapVarToExpr[Out].begin(),
+    for (auto Out : Info.Outputs) {
+      Info.OutVarDef[Out].append(MapVarToExpr[Out].begin(),
                                   MapVarToExpr[Out].end());
       llvm::errs() << " " << Out->getName();
     }
     llvm::errs() << "\n";
     llvm::errs() << "InputsOutputs =";
-    for (auto InOut : Info->InputsOutputs) {
-      Info->InOutVarUse[InOut].append(MapVarToExpr[InOut].begin(),
+    for (auto InOut : Info.InputsOutputs) {
+      Info.InOutVarUse[InOut].append(MapVarToExpr[InOut].begin(),
                                       MapVarToExpr[InOut].end());
       llvm::errs() << " " << InOut->getName();
     }
@@ -1134,7 +1139,7 @@ public:
               dyn_cast<OMPArraySectionExpr>(T2->getIdx());
           const VarDecl *VD = dyn_cast<VarDecl>(RefExpr->getDecl());
 
-          Info->RangedVar[VD] = Range;
+          Info.RangedVar[VD] = Range;
         }
 
         assert(RefExpr && "Unexpected expression in the map clause");
@@ -1194,8 +1199,8 @@ public:
       if (verbose)
         llvm::errs() << ">>> Found RefExpr = " << VD->getName() << " --> ";
 
-      if (Info->CounterInfo.find(VD) != Info->CounterInfo.end()) {
-        Info->CounterUse[VD].push_back(D);
+      if (Info.CounterInfo.find(VD) != Info.CounterInfo.end()) {
+        Info.CounterUse[VD].push_back(D);
         if (verbose)
           llvm::errs() << "is cnt\n";
         return true;
@@ -1224,13 +1229,13 @@ public:
         MapType = SparkRuntime.getMapType(VD);
       }
 
-      bool currInput = std::find(Info->Inputs.begin(), Info->Inputs.end(),
-                                 VD) != Info->Inputs.end();
-      bool currOutput = std::find(Info->Outputs.begin(), Info->Outputs.end(),
-                                  VD) != Info->Outputs.end();
+      bool currInput = std::find(Info.Inputs.begin(), Info.Inputs.end(),
+                                 VD) != Info.Inputs.end();
+      bool currOutput = std::find(Info.Outputs.begin(), Info.Outputs.end(),
+                                  VD) != Info.Outputs.end();
       bool currInputOutput =
-          std::find(Info->InputsOutputs.begin(), Info->InputsOutputs.end(),
-                    VD) != Info->InputsOutputs.end();
+          std::find(Info.InputsOutputs.begin(), Info.InputsOutputs.end(),
+                    VD) != Info.InputsOutputs.end();
 
       MapVarToExpr[VD].push_back(D);
 
@@ -1240,10 +1245,10 @@ public:
         if (currInputOutput) {
           ;
         } else if (currOutput) {
-          Info->Outputs.erase(VD);
-          Info->InputsOutputs.insert(VD);
+          Info.Outputs.erase(VD);
+          Info.InputsOutputs.insert(VD);
         } else {
-          Info->Inputs.insert(VD);
+          Info.Inputs.insert(VD);
         }
       } else if (current_use == Def) {
         if (verbose)
@@ -1251,17 +1256,17 @@ public:
         if (currInputOutput) {
           ;
         } else if (currInput) {
-          Info->Inputs.erase(VD);
-          Info->InputsOutputs.insert(VD);
+          Info.Inputs.erase(VD);
+          Info.InputsOutputs.insert(VD);
         } else {
-          Info->Outputs.insert(VD);
+          Info.Outputs.insert(VD);
         }
       } else if (current_use == UseDef) {
         if (verbose)
           llvm::errs() << " is UseDef";
-        Info->Inputs.erase(VD);
-        Info->Outputs.erase(VD);
-        Info->InputsOutputs.insert(VD);
+        Info.Inputs.erase(VD);
+        Info.Outputs.erase(VD);
+        Info.InputsOutputs.insert(VD);
       } else {
         if (verbose)
           llvm::errs() << " is Nothing ???";
@@ -1270,8 +1275,8 @@ public:
       // When variables are not fully broadcasted to the workers (internal
       // data map), index expressions are marked for codegen modification
       // if(CurrArrayExpr)
-      if (const OMPArraySectionExpr *Range = Info->RangedVar[VD]) {
-        Info->RangedArrayAccess[VD].push_back(CurrArrayExpr);
+      if (const OMPArraySectionExpr *Range = Info.RangedVar[VD]) {
+        Info.RangedArrayAccess[VD].push_back(CurrArrayExpr);
         if (verbose)
           llvm::errs() << " and ranged";
       }
@@ -1412,7 +1417,7 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
   llvm::Module *mod = &(CGM.getModule());
 
   // FIXME: should be the right function
-  auto &info = *(SparkMappingFunctions.back());
+  auto &info = SparkMappingFunctions.back();
 
   // Get JNI type
   llvm::StructType *StructTy_JNINativeInterface =
@@ -1677,11 +1682,23 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   auto &typeMap = OffloadingMapVarsType;
   auto &indexMap = OffloadingMapVarsIndex;
 
+  llvm::errs() << "NUMBER OF COUNTERS == " << ForDirective.counters().size() << "\n";
+
   // FIXME: what about several functions
-  OMPSparkMappingInfo info(ForDirective);
-  SparkMappingFunctions.push_back(&info);
+  SparkMappingFunctions.push_back(OMPSparkMappingInfo(&ForDirective));
+  OMPSparkMappingInfo &info = SparkMappingFunctions.back();
+
+  llvm::errs() << "NUMBER OF COUNTERS 2 == " << info.OMPDirective->counters().size() << "\n";
+
+  llvm::errs() << "NUMBER OF COUNTERS 3 == " << SparkMappingFunctions.back().OMPDirective->counters().size() << "\n";
 
   llvm::errs() << "--- MappingFunction ID = " << info.Identifier << "\n";
+
+  llvm::errs() << "--- MappingFunction ID = " << SparkMappingFunctions.back().Identifier << "\n";
+
+  llvm::errs() << "--- MappingFunction Size = " << SparkMappingFunctions.size() << "\n";
+
+
 
   if (verbose)
     llvm::errs() << "Offloaded variables \n";
@@ -1746,11 +1763,11 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   // Initialize a new CodeGenFunction used to generate the mapping
 
   // Detect input/output expression from the loop body
-  FindKernelArguments Finder(CGM, *this, &info);
+  FindKernelArguments Finder(CGM, *this, info);
   Finder.Explore(LoopStmt);
 
   llvm::errs() << "-- SIZE1 = " << info.Outputs.size() << "\n";
-  llvm::errs() << "-- SIZE2 = " << SparkMappingFunctions.back()->Outputs.size() << "\n";
+  llvm::errs() << "-- SIZE2 = " << SparkMappingFunctions.back().Outputs.size() << "\n";
 
 
   // Initialize arguments
