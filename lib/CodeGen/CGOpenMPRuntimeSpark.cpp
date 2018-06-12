@@ -649,7 +649,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
               dyn_cast_or_null<VarDecl>(CntExpr->getDecl())) {
         auto it_init = OMPLoop->counter_inits().begin();
         auto it_step = OMPLoop->counter_steps().begin();
-        auto it_num = OMPLoop->counter_inits().begin();
+        auto it_num = OMPLoop->counter_num_iterations().begin();
 
         llvm::errs() << "TEST 1\n";
 
