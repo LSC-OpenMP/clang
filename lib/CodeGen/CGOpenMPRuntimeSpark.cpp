@@ -1684,7 +1684,6 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
 
   llvm::errs() << "NUMBER OF COUNTERS == " << ForDirective.counters().size() << "\n";
 
-  // FIXME: what about several functions
   SparkMappingFunctions.push_back(OMPSparkMappingInfo(&ForDirective));
   OMPSparkMappingInfo &info = SparkMappingFunctions.back();
 
@@ -1892,7 +1891,7 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
     CntBoundVal = CGF.EmitLoadOfScalar(AddrCntBoundArg, /*Volatile=*/false,
                                        Ctx.IntTy, SourceLocation());
 
-    addOpenMPKernelArgVar(VD, AddrCnt.getPointer());
+    info.addOpenMPKernelArgVar(VD, AddrCnt.getPointer());
     ArgsIt++;
   }
 
@@ -1936,11 +1935,11 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
         llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
         for (auto it = info.RangedArrayAccess[VD].begin();
              it != info.RangedArrayAccess[VD].end(); ++it)
-          addOpenMPKernelArgRange(*it, LowerBound);
+          info.addOpenMPKernelArgRange(*it, LowerBound);
       }
     }
 
-    addOpenMPKernelArgVar(VD, valuePtr);
+    info.addOpenMPKernelArgVar(VD, valuePtr);
     ++ArgsIt;
   }
 
@@ -1984,11 +1983,11 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
         llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
         for (auto it = info.RangedArrayAccess[VD].begin();
              it != info.RangedArrayAccess[VD].end(); ++it)
-          addOpenMPKernelArgRange(*it, LowerBound);
+          info.addOpenMPKernelArgRange(*it, LowerBound);
       }
     }
 
-    addOpenMPKernelArgVar(VD, ValPtr);
+    info.addOpenMPKernelArgVar(VD, ValPtr);
     ++ArgsIt;
   }
 
@@ -2030,16 +2029,15 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
         llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
         for (auto it = info.RangedArrayAccess[VD].begin();
              it != info.RangedArrayAccess[VD].end(); ++it)
-          addOpenMPKernelArgRange(*it, LowerBound);
+          info.addOpenMPKernelArgRange(*it, LowerBound);
       }
     }
 
-    addOpenMPKernelArgVar(VD, ValPtr);
+    info.addOpenMPKernelArgVar(VD, ValPtr);
     ++ArgsIt;
   }
 
   {
-    // FIXME: CGM.OpenMPSupport.startSparkRegion();
     // Create a separate cleanup scope for the body, in case it is not
     // a compound statement.
 
@@ -2058,8 +2056,6 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
       CGF.EmitStmt(Body);
 
     llvm::errs() << "End of Loop\n";
-
-    // FIXME: CGM.OpenMPSupport.stopSparkRegion();
   }
 
   llvm::errs() << "Release bytearrays\n";

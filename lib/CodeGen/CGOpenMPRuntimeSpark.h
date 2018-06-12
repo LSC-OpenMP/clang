@@ -132,6 +132,14 @@ public:
     OMPSparkMappingInfo(const OMPLoopDirective *Directive) : OMPDirective(Directive), Identifier(_NextId++) {
     }
     ~OMPSparkMappingInfo() {}
+
+    void addOpenMPKernelArgVar(const VarDecl *VD, llvm::Value *Addr) {
+      KernelArgVars[VD] = Addr;
+    }
+
+    void addOpenMPKernelArgRange(const Expr *E, llvm::Value *Addr) {
+      RangeIndexes[E] = Addr;
+    }
   };
 
   unsigned CurrentIdentifier = 0;
@@ -218,19 +226,6 @@ public:
   void EmitSparkOutput(llvm::raw_fd_ostream &SPARK_FILE);
   std::string getSparkVarName(const ValueDecl *VD);
 
-  void addOpenMPKernelArgVar(const VarDecl *VD, llvm::Value *Addr) {
-    assert(!SparkMappingFunctions.empty() &&
-           "OpenMP private variables region is not started.");
-    SparkMappingFunctions.back().KernelArgVars[VD] = Addr;
-  }
-  void addOpenMPKernelArgRange(const Expr *E, llvm::Value *Addr) {
-    SparkMappingFunctions.back().RangeIndexes[E] = Addr;
-  }
-  void delOpenMPKernelArgVar(const VarDecl *VD) {
-    assert(!SparkMappingFunctions.empty() &&
-           "OpenMP private variables region is not started.");
-    SparkMappingFunctions.back().KernelArgVars[VD] = 0;
-  }
   void addOffloadingMapVariable(const ValueDecl *VD, unsigned Type) {
     OffloadingMapVarsType[VD] = Type;
     OffloadingMapVarsIndex[VD] = getOffloadingMapCurrentIdentifier();
