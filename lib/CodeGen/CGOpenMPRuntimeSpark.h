@@ -64,9 +64,7 @@ class CGOpenMPRuntimeSpark : public CGOpenMPRuntime {
 public:
   explicit CGOpenMPRuntimeSpark(CodeGenModule &CGM);
 
-  static bool classof(const CGOpenMPRuntime *Runtime) {
-    return true;
-  }
+  static bool classof(const CGOpenMPRuntime *Runtime) { return true; }
 
   /// \brief Emit outlined function for 'target' directive on the NVPTX
   /// device.
@@ -98,14 +96,14 @@ public:
       OpenMPDirectiveKind InnermostKind, const RegionCodeGenTy &CodeGen,
       unsigned CaptureLevel = 1, unsigned ImplicitParamStop = 0) override;
 
-  llvm::Function *emitFakeOpenMPFunction(
-      const CapturedStmt &S, bool UseCapturedArgumentsOnly = false,
-      unsigned CaptureLevel = 1, unsigned ImplicitParamStop = 0,
-      bool NonAliasedMaps = false);
+  llvm::Function *emitFakeOpenMPFunction(const CapturedStmt &S,
+                                         bool UseCapturedArgumentsOnly = false,
+                                         unsigned CaptureLevel = 1,
+                                         unsigned ImplicitParamStop = 0,
+                                         bool NonAliasedMaps = false);
 
   class OMPSparkMappingInfo {
   public:
-
     const OMPLoopDirective *OMPDirective;
     llvm::SmallSet<const VarDecl *, 8> Inputs;
     llvm::SmallSet<const VarDecl *, 8> Outputs;
@@ -129,8 +127,8 @@ public:
     const int Identifier;
     static int _NextId;
 
-    OMPSparkMappingInfo(const OMPLoopDirective *Directive) : OMPDirective(Directive), Identifier(_NextId++) {
-    }
+    OMPSparkMappingInfo(const OMPLoopDirective *Directive)
+        : OMPDirective(Directive), Identifier(_NextId++) {}
     ~OMPSparkMappingInfo() {}
 
     void addOpenMPKernelArgVar(const VarDecl *VD, llvm::Value *Addr) {
@@ -234,7 +232,8 @@ public:
   /// \return 0 if the variable is not an argument, or address of the arguments
   /// otherwise.
   llvm::Value *getOpenMPKernelArgVar(const VarDecl *VD) {
-    if (SparkMappingFunctions.empty()) return 0;
+    if (SparkMappingFunctions.empty())
+      return 0;
     llvm::errs() << "Look for " << VD->getNameAsString() << "\n";
     return SparkMappingFunctions.back().KernelArgVars[VD];
   }
@@ -242,7 +241,8 @@ public:
   /// \return 0 if the variable is not an argument, or address of the arguments
   /// otherwise.
   llvm::Value *getOpenMPKernelArgRange(const Expr *VarExpr) {
-    if (SparkMappingFunctions.empty()) return 0;
+    if (SparkMappingFunctions.empty())
+      return 0;
     return SparkMappingFunctions.back().RangeIndexes[VarExpr];
   }
 };

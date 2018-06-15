@@ -141,7 +141,6 @@ private:
 };
 } // namespace
 
-
 int CGOpenMPRuntimeSpark::OMPSparkMappingInfo::_NextId = 0;
 
 CGOpenMPRuntimeSpark::CGOpenMPRuntimeSpark(CodeGenModule &CGM)
@@ -346,10 +345,11 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
   SPARK_FILE << "import org.apache.spark.SparkFiles\n";
   SPARK_FILE << "class OmpKernel {\n";
 
-  llvm::errs() << "--- MappingFunction Size = " << SparkMappingFunctions.size() << "\n";
+  llvm::errs() << "--- MappingFunction Size = " << SparkMappingFunctions.size()
+               << "\n";
 
   llvm::errs() << "Mapping Native\n";
-  for (OMPSparkMappingInfo& info : SparkMappingFunctions) {
+  for (OMPSparkMappingInfo &info : SparkMappingFunctions) {
 
     llvm::errs() << "--- MappingFunction ID = " << info.Identifier << "\n";
 
@@ -363,7 +363,8 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     llvm::errs() << "Native 2\n";
     SPARK_FILE << "  @native def mappingMethod" << info.Identifier << "(";
     i = 0;
-    llvm::errs() << "Native 2.5.. NbCnt = " <<     OMPLoop->counters().size() << "\n";
+    llvm::errs() << "Native 2.5.. NbCnt = " << OMPLoop->counters().size()
+                 << "\n";
 
     for (auto I : OMPLoop->counters()) {
       llvm::errs() << "Native 3\n";
@@ -378,8 +379,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     llvm::errs() << "Native 3.5\n";
 
     i = 0;
-    for (auto it = info.Inputs.begin(); it != info.Inputs.end();
-         ++it, i++) {
+    for (auto it = info.Inputs.begin(); it != info.Inputs.end(); ++it, i++) {
       llvm::errs() << "Native 4\n";
 
       // Separator
@@ -392,8 +392,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info.Outputs.begin(); it != info.Outputs.end();
-         ++it, i++) {
+    for (auto it = info.Outputs.begin(); it != info.Outputs.end(); ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
@@ -422,8 +421,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
       SPARK_FILE << "index" << i << ": Long, bound" << i << ": Long";
     }
     i = 0;
-    for (auto it = info.Inputs.begin(); it != info.Inputs.end();
-         ++it, i++) {
+    for (auto it = info.Inputs.begin(); it != info.Inputs.end(); ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
@@ -434,8 +432,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
     }
-    for (auto it = info.Outputs.begin(); it != info.Outputs.end();
-         ++it, i++) {
+    for (auto it = info.Outputs.begin(); it != info.Outputs.end(); ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
@@ -462,8 +459,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
       SPARK_FILE << "index" << i << ", bound" << i;
     }
     i = 0;
-    for (auto it = info.Inputs.begin(); it != info.Inputs.end();
-         ++it, i++) {
+    for (auto it = info.Inputs.begin(); it != info.Inputs.end(); ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
@@ -474,8 +470,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
     }
-    for (auto it = info.Outputs.begin(); it != info.Outputs.end();
-         ++it, i++) {
+    for (auto it = info.Outputs.begin(); it != info.Outputs.end(); ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
@@ -1051,21 +1046,21 @@ public:
     llvm::errs() << "Inputs =";
     for (auto In : Info.Inputs) {
       Info.InVarUse[In].append(MapVarToExpr[In].begin(),
-                                MapVarToExpr[In].end());
+                               MapVarToExpr[In].end());
       llvm::errs() << " " << In->getName();
     }
     llvm::errs() << "\n";
     llvm::errs() << "Outputs =";
     for (auto Out : Info.Outputs) {
       Info.OutVarDef[Out].append(MapVarToExpr[Out].begin(),
-                                  MapVarToExpr[Out].end());
+                                 MapVarToExpr[Out].end());
       llvm::errs() << " " << Out->getName();
     }
     llvm::errs() << "\n";
     llvm::errs() << "InputsOutputs =";
     for (auto InOut : Info.InputsOutputs) {
       Info.InOutVarUse[InOut].append(MapVarToExpr[InOut].begin(),
-                                      MapVarToExpr[InOut].end());
+                                     MapVarToExpr[InOut].end());
       llvm::errs() << " " << InOut->getName();
     }
     llvm::errs() << "\n";
@@ -1229,13 +1224,13 @@ public:
         MapType = SparkRuntime.getMapType(VD);
       }
 
-      bool currInput = std::find(Info.Inputs.begin(), Info.Inputs.end(),
-                                 VD) != Info.Inputs.end();
+      bool currInput = std::find(Info.Inputs.begin(), Info.Inputs.end(), VD) !=
+                       Info.Inputs.end();
       bool currOutput = std::find(Info.Outputs.begin(), Info.Outputs.end(),
                                   VD) != Info.Outputs.end();
       bool currInputOutput =
-          std::find(Info.InputsOutputs.begin(), Info.InputsOutputs.end(),
-                    VD) != Info.InputsOutputs.end();
+          std::find(Info.InputsOutputs.begin(), Info.InputsOutputs.end(), VD) !=
+          Info.InputsOutputs.end();
 
       MapVarToExpr[VD].push_back(D);
 
@@ -1682,22 +1677,26 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   auto &typeMap = OffloadingMapVarsType;
   auto &indexMap = OffloadingMapVarsIndex;
 
-  llvm::errs() << "NUMBER OF COUNTERS == " << ForDirective.counters().size() << "\n";
+  llvm::errs() << "NUMBER OF COUNTERS == " << ForDirective.counters().size()
+               << "\n";
 
   SparkMappingFunctions.push_back(OMPSparkMappingInfo(&ForDirective));
   OMPSparkMappingInfo &info = SparkMappingFunctions.back();
 
-  llvm::errs() << "NUMBER OF COUNTERS 2 == " << info.OMPDirective->counters().size() << "\n";
+  llvm::errs() << "NUMBER OF COUNTERS 2 == "
+               << info.OMPDirective->counters().size() << "\n";
 
-  llvm::errs() << "NUMBER OF COUNTERS 3 == " << SparkMappingFunctions.back().OMPDirective->counters().size() << "\n";
+  llvm::errs() << "NUMBER OF COUNTERS 3 == "
+               << SparkMappingFunctions.back().OMPDirective->counters().size()
+               << "\n";
 
   llvm::errs() << "--- MappingFunction ID = " << info.Identifier << "\n";
 
-  llvm::errs() << "--- MappingFunction ID = " << SparkMappingFunctions.back().Identifier << "\n";
+  llvm::errs() << "--- MappingFunction ID = "
+               << SparkMappingFunctions.back().Identifier << "\n";
 
-  llvm::errs() << "--- MappingFunction Size = " << SparkMappingFunctions.size() << "\n";
-
-
+  llvm::errs() << "--- MappingFunction Size = " << SparkMappingFunctions.size()
+               << "\n";
 
   if (verbose)
     llvm::errs() << "Offloaded variables \n";
@@ -1766,8 +1765,8 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   Finder.Explore(LoopStmt);
 
   llvm::errs() << "-- SIZE1 = " << info.Outputs.size() << "\n";
-  llvm::errs() << "-- SIZE2 = " << SparkMappingFunctions.back().Outputs.size() << "\n";
-
+  llvm::errs() << "-- SIZE2 = " << SparkMappingFunctions.back().Outputs.size()
+               << "\n";
 
   // Initialize arguments
   FunctionArgList ArgList;
