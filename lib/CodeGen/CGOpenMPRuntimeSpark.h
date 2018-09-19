@@ -102,25 +102,24 @@ public:
                                          unsigned ImplicitParamStop = 0,
                                          bool NonAliasedMaps = false);
 
+  llvm::Function *
+  outlineTargetDirective(const OMPExecutableDirective &D, StringRef Name,
+                         const RegionCodeGenTy &CodeGen) override;
+
   class OMPSparkMappingInfo {
   public:
     const OMPLoopDirective *OMPDirective;
-    llvm::SmallSet<const VarDecl *, 8> Inputs;
-    llvm::SmallSet<const VarDecl *, 8> Outputs;
-    llvm::SmallSet<const VarDecl *, 8> InputsOutputs;
-    llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
-        InOutVarUse;
-    llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
-        InVarUse;
-    llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
-        OutVarDef;
+    llvm::SmallSet<const VarDecl *, 8> StrictlyInputs;
+    llvm::SmallSet<const VarDecl *, 8> StrictlyOutputs;
+    llvm::SmallSet<const VarDecl *, 8> BothInputsOutputs;
+    llvm::SmallSet<const VarDecl *, 8> AllInputs;
+    llvm::SmallSet<const VarDecl *, 8> AllOutputs;
+    llvm::SmallSet<const VarDecl *, 8> AllArgs;
     llvm::DenseMap<const VarDecl *, const OMPArraySectionExpr *> RangedVar;
     llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
         RangedArrayAccess;
     llvm::DenseMap<const Expr *, llvm::Value *> RangeIndexes;
     llvm::SmallVector<const VarDecl *, 8> ReducedVar;
-    llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 8>>
-        CounterUse;
     llvm::DenseMap<const VarDecl *, llvm::SmallVector<const Expr *, 4>>
         CounterInfo;
     llvm::DenseMap<const VarDecl *, llvm::Value *> KernelArgVars;
@@ -140,21 +139,15 @@ public:
     }
   };
 
-  unsigned CurrentIdentifier = 0;
+  unsigned CurrentScalaIdentifier = 0;
   llvm::SmallVector<OMPSparkMappingInfo, 16> SparkMappingFunctions;
 
   bool ShouldAccessJNIArgs = false;
 
   llvm::DenseMap<const ValueDecl *, unsigned> OffloadingMapVarsIndex;
-  llvm::DenseMap<const ValueDecl *, unsigned> OffloadingMapVarsType;
+  llvm::StringMap<unsigned> VarNameToScalaID;
 
-  int getMapType(const VarDecl *VD) {
-    if (OffloadingMapVarsType.find(VD) != OffloadingMapVarsType.end()) {
-      return OffloadingMapVarsType[VD];
-    }
-    return -1;
-  }
-  unsigned getOffloadingMapCurrentIdentifier() { return CurrentIdentifier++; }
+  unsigned getNewScalaID() { return CurrentScalaIdentifier++; }
 
   Expr *ActOnIntegerConstant(SourceLocation Loc, uint64_t Val);
   bool isNotSupportedLoopForm(Stmt *S, OpenMPDirectiveKind Kind, Expr *&InitVal,
@@ -194,22 +187,26 @@ public:
   void DefineJNITypes();
   void BuildJNITy();
   llvm::Constant *createJNIRuntimeFunction(unsigned Function);
-  llvm::Value *EmitJNINewByteArray(CodeGenFunction &CGF, llvm::Value *Size);
+  llvm::Value *EmitJNINewByteArray(CodeGenFunction &CGF, llvm::Value *Env,
+                                   llvm::Value *Size);
   llvm::Value *EmitJNIReleaseByteArrayElements(CodeGenFunction &CGF,
+                                               llvm::Value *Env,
                                                llvm::Value *Array,
                                                llvm::Value *Elems,
                                                llvm::Value *Mode);
   llvm::Value *EmitJNIGetByteArrayElements(CodeGenFunction &CGF,
-                                           llvm::Value *Array,
+                                           llvm::Value *Env, llvm::Value *Array,
                                            llvm::Value *IsCopy);
   llvm::Value *EmitJNIReleasePrimitiveArrayCritical(CodeGenFunction &CGF,
+                                                    llvm::Value *Env,
                                                     llvm::Value *Array,
                                                     llvm::Value *Carray,
                                                     llvm::Value *Mode);
   llvm::Value *EmitJNIGetPrimitiveArrayCritical(CodeGenFunction &CGF,
+                                                llvm::Value *Env,
                                                 llvm::Value *Array,
                                                 llvm::Value *IsCopy);
-  llvm::Value *EmitJNICreateNewTuple(CodeGenFunction &CGF,
+  llvm::Value *EmitJNICreateNewTuple(CodeGenFunction &CGF, llvm::Value *Env,
                                      ArrayRef<llvm::Value *> Elements);
 
   llvm::Function *GenerateMappingKernel(const OMPExecutableDirective &S);
@@ -222,12 +219,16 @@ public:
   void EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
                         OMPSparkMappingInfo &info, bool isLast);
   void EmitSparkOutput(llvm::raw_fd_ostream &SPARK_FILE);
-  std::string getSparkVarName(const ValueDecl *VD);
+  static std::string getSparkVarName(const ValueDecl *VD);
 
-  void addOffloadingMapVariable(const ValueDecl *VD, unsigned Type) {
-    OffloadingMapVarsType[VD] = Type;
-    OffloadingMapVarsIndex[VD] = getOffloadingMapCurrentIdentifier();
+  void addOffloadingMapVariable(const ValueDecl *VD) {
+    if (OffloadingMapVarsIndex.find(VD) == OffloadingMapVarsIndex.end()) {
+      unsigned ScalaId = getNewScalaID();
+      OffloadingMapVarsIndex[VD] = ScalaId;
+      VarNameToScalaID[VD->getNameAsString()] = ScalaId;
+    }
   }
+
   /// \brief Checks, if the specified variable is currently an argument.
   /// \return 0 if the variable is not an argument, or address of the arguments
   /// otherwise.

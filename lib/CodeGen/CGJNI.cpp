@@ -66,6 +66,7 @@ void CGOpenMPRuntimeSpark::BuildJNITy() {
 
     jintTy = CGT.ConvertType(jintQTy);
     jsizeTy = CGT.ConvertType(jsizeQTy);
+    jbyteTy = CGT.ConvertType(jbyteQTy);
     jbooleanTy = CGT.ConvertType(jbooleanQTy);
     jlongTy = CGT.ConvertType(jlongQTy);
     jobjectTy = CGT.ConvertType(jobjectQTy);
@@ -78,27 +79,27 @@ void CGOpenMPRuntimeSpark::BuildJNITy() {
 }
 
 enum OpenMPRTLFunctionJNI {
-  /// \brief Call to jbyteArray NewByteArray(jsize len)
+  /// \brief Call to jbyteArray NewByteArray(JNIEnv *env, jsize len)
   OMPRTL_JNI__NewByteArray,
-  /// \brief Call to void ReleaseByteArrayElements(jbyteArray array, jbyte
+  /// \brief Call to void ReleaseByteArrayElements(JNIEnv *env, jbyteArray
+  /// array, jbyte
   /// *elems, jint mode)
   OMPRTL_JNI__ReleaseByteArrayElements,
-  /// \brief Call to jbyte *GetByteArrayElements(jbyteArray array, jboolean
+  /// \brief Call to jbyte *GetByteArrayElements(JNIEnv *env, jbyteArray array,
+  /// jboolean
   /// *isCopy)
   OMPRTL_JNI__GetByteArrayElements,
-  /// \brief Call to void ReleasePrimitiveArrayCritical(jarray array, void
+  /// \brief Call to void ReleasePrimitiveArrayCritical(JNIEnv *env, jarray
+  /// array, void
   /// *carray, jint mode)
   OMPRTL_JNI__ReleasePrimitiveArrayCritical,
-  /// \brief Call to void *GetPrimitiveArrayCritical(jarray array, jboolean
+  /// \brief Call to void *GetPrimitiveArrayCritical(JNIEnv *env, jarray array,
+  /// jboolean
   /// *isCopy)
   OMPRTL_JNI__GetPrimitiveArrayCritical,
-  /// \brief Call to jclass FindClass(const char *name);
-  OMPRTL_JNI__FindClass,
-  /// \brief Call to jmethodID GetMethodID(jclass clazz, const char *name, const
-  /// char *sig)
-  OMPRTL_JNI__GetMethodID,
-  /// \brief Call to jobject NewObject(jclass clazz, jmethodID methodID, ...);
-  OMPRTL_JNI__NewObject,
+  /// \brief Call to jobject NewObject(JNIEnv *env, jint size, jbyteArray
+  /// *arrays);
+  OMPRTL_JNI__CreateNewTuple,
 };
 
 /// \brief Returns specified OpenMP runtime function for the current OpenMP
@@ -107,78 +108,63 @@ enum OpenMPRTLFunctionJNI {
 /// \return Specified function.
 llvm::Constant *
 CGOpenMPRuntimeSpark::createJNIRuntimeFunction(unsigned Function) {
-  ASTContext &Ctx = CGM.getContext();
-  CodeGenTypes &CGT = CGM.getTypes();
   llvm::Constant *RTLFn = nullptr;
 
   switch (static_cast<OpenMPRTLFunctionJNI>(Function)) {
   case OMPRTL_JNI__NewByteArray: {
-    // Build jbyteArray NewByteArray(jsize len);
-    llvm::Type *TypeParams[] = {jsizeTy};
+    // Build jbyteArray __jni_NewByteArray(JNIEnv *env, jsize len);
+    llvm::Type *TypeParams[] = {JNIEnvTy, jsizeTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(jbyteArrayTy, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "NewByteArray");
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_NewByteArray");
     break;
   }
   case OMPRTL_JNI__ReleaseByteArrayElements: {
-    // Build void ReleaseByteArrayElements(jbyteArray array, jbyte *elems, jint
-    // mode);
-    llvm::Type *TypeParams[] = {jbyteArrayTy, jbyteTy, jintTy};
+    // Build void __jni_ReleaseByteArrayElements(JNIEnv *env, jbyteArray array,
+    // jbyte *elems, jint mode);
+    llvm::Type *TypeParams[] = {JNIEnvTy, jbyteArrayTy, jbyteTy->getPointerTo(),
+                                jintTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.VoidTy, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "ReleaseByteArrayElements");
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_ReleaseByteArrayElements");
     break;
   }
   case OMPRTL_JNI__GetByteArrayElements: {
-    // Build jbyte *GetByteArrayElements(jbyteArray array, jboolean *isCopy);
-    llvm::Type *TypeParams[] = {jbyteArrayTy, jbooleanTy->getPointerTo()};
+    // Build jbyte *__jni_GetByteArrayElements(JNIEnv *env, jbyteArray array,
+    // jboolean *isCopy);
+    llvm::Type *TypeParams[] = {JNIEnvTy, jbyteArrayTy,
+                                jbooleanTy->getPointerTo()};
     llvm::FunctionType *FnTy = llvm::FunctionType::get(
         jbyteTy->getPointerTo(), TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "GetByteArrayElements");
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_GetByteArrayElements");
     break;
   }
   case OMPRTL_JNI__ReleasePrimitiveArrayCritical: {
-    // Build void ReleasePrimitiveArrayCritical(jarray array, void *carray, jint
-    // mode);
-    llvm::Type *TypeParams[] = {jarrayTy, CGM.VoidPtrTy, jintTy};
+    // Build void __jni_ReleasePrimitiveArrayCritical(JNIEnv *env, jarray array,
+    // void *carray, jint mode);
+    llvm::Type *TypeParams[] = {JNIEnvTy, jarrayTy, CGM.VoidPtrTy, jintTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.VoidTy, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "ReleasePrimitiveArrayCritical");
+    RTLFn =
+        CGM.CreateRuntimeFunction(FnTy, "__jni_ReleasePrimitiveArrayCritical");
     break;
   }
   case OMPRTL_JNI__GetPrimitiveArrayCritical: {
-    // Build void *GetPrimitiveArrayCritical(jarray array, jboolean *isCopy);
-    llvm::Type *TypeParams[] = {jarrayTy, jbooleanTy->getPointerTo()};
+    // Build void *__jni_GetPrimitiveArrayCritical(JNIEnv *env, jarray array,
+    // jboolean *isCopy);
+    llvm::Type *TypeParams[] = {JNIEnvTy, jarrayTy, jbooleanTy->getPointerTo()};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.VoidPtrTy, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "GetPrimitiveArrayCritical");
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_GetPrimitiveArrayCritical");
     break;
   }
-  case OMPRTL_JNI__FindClass: {
-    // Build jclass FindClass(const char *name);
-    llvm::Type *TypeParams[] = {CGT.ConvertType(Ctx.getUIntPtrType())};
-    llvm::FunctionType *FnTy =
-        llvm::FunctionType::get(jclassTy, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "FindClass");
-    break;
-  }
-  case OMPRTL_JNI__GetMethodID: {
-    // Build jmethodID GetMethodID(jclass clazz, const char *name, const char
-    // *sig);
-    llvm::Type *TypeParams[] = {jclassTy, CGT.ConvertType(Ctx.getUIntPtrType()),
-                                CGT.ConvertType(Ctx.getUIntPtrType())};
-    llvm::FunctionType *FnTy =
-        llvm::FunctionType::get(jmethodIDTy, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "GetMethodID");
-    break;
-  }
-  case OMPRTL_JNI__NewObject: {
-    // Build jobject NewObject(jclass clazz, jmethodID methodID, ...);
-    llvm::Type *TypeParams[] = {jclassTy, jmethodIDTy,
-                                CGT.ConvertType(Ctx.getBuiltinVaListType())};
+  case OMPRTL_JNI__CreateNewTuple: {
+    // Build jobject __jni_CreateNewTuple(JNIEnv *env, jint size, jbyteArray
+    // *arrays);
+    llvm::Type *TypeParams[] = {JNIEnvTy, jintTy, jbyteArrayTy->getPointerTo()};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(jobjectTy, TypeParams, /*isVarArg*/ false);
-    RTLFn = CGM.CreateRuntimeFunction(FnTy, "GetMethodID");
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_CreateNewTuple");
     break;
   }
   }
@@ -187,75 +173,68 @@ CGOpenMPRuntimeSpark::createJNIRuntimeFunction(unsigned Function) {
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::EmitJNINewByteArray(CodeGenFunction &CGF,
+                                                       llvm::Value *Env,
                                                        llvm::Value *Size) {
-  // Build call NewByteArray(jsize len)
+  // Build call __jni_NewByteArray(jsize len)
   llvm::Value *Args[] = {
-      CGF.Builder.CreateIntCast(Size, CGF.Int32Ty, /*isSigned*/ true)};
+      Env, CGF.Builder.CreateIntCast(Size, CGF.Int32Ty, /*isSigned*/ true)};
   return CGF.EmitRuntimeCall(createJNIRuntimeFunction(OMPRTL_JNI__NewByteArray),
                              Args);
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::EmitJNIReleaseByteArrayElements(
-    CodeGenFunction &CGF, llvm::Value *Array, llvm::Value *Elems,
-    llvm::Value *Mode) {
-  // Build call
-  // ReleaseByteArrayElements(jbyteArray array, jbyte *elems, jint mode)
-  llvm::Value *Args[] = {Array, Elems, Mode};
+    CodeGenFunction &CGF, llvm::Value *Env, llvm::Value *Array,
+    llvm::Value *Elems, llvm::Value *Mode) {
+  // Build call __jni_ReleaseByteArrayElements(JNIEnv *env, jbyteArray array,
+  // jbyte *elems, jint mode)
+  llvm::Value *Args[] = {Env, Array, Elems, Mode};
   return CGF.EmitRuntimeCall(
       createJNIRuntimeFunction(OMPRTL_JNI__ReleaseByteArrayElements), Args);
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::EmitJNIGetByteArrayElements(
-    CodeGenFunction &CGF, llvm::Value *Array, llvm::Value *IsCopy) {
-  // Build call GetByteArrayElements(jbyteArray array, jboolean *isCopy)
-  llvm::Value *Args[] = {Array, IsCopy};
+    CodeGenFunction &CGF, llvm::Value *Env, llvm::Value *Array,
+    llvm::Value *IsCopy) {
+  // Build call __jni_GetByteArrayElements(JNIEnv *env, jbyteArray array,
+  // jboolean *isCopy)
+  llvm::Value *Args[] = {Env, Array, IsCopy};
   return CGF.EmitRuntimeCall(
       createJNIRuntimeFunction(OMPRTL_JNI__GetByteArrayElements), Args);
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::EmitJNIReleasePrimitiveArrayCritical(
-    CodeGenFunction &CGF, llvm::Value *Array, llvm::Value *Carray,
-    llvm::Value *Mode) {
-  // Build call
-  // ReleasePrimitiveArrayCritical(jarray array, void *carray, jint mode)
-  llvm::Value *Args[] = {Array, Carray, Mode};
+    CodeGenFunction &CGF, llvm::Value *Env, llvm::Value *Array,
+    llvm::Value *Carray, llvm::Value *Mode) {
+  // Build call __jni_ReleasePrimitiveArrayCritical(JNIEnv *env, jarray array,
+  // void *carray, jint mode)
+  llvm::Value *Args[] = {Env, Array, Carray, Mode};
   return CGF.EmitRuntimeCall(
       createJNIRuntimeFunction(OMPRTL_JNI__ReleasePrimitiveArrayCritical),
       Args);
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::EmitJNIGetPrimitiveArrayCritical(
-    CodeGenFunction &CGF, llvm::Value *Array, llvm::Value *IsCopy) {
-  // Build call GetPrimitiveArrayCritical(jarray array, jboolean *isCopy)
-  llvm::Value *Args[] = {Array, IsCopy};
+    CodeGenFunction &CGF, llvm::Value *Env, llvm::Value *Array,
+    llvm::Value *IsCopy) {
+  // Build call __jni_GetPrimitiveArrayCritical(JNIEnv *env, jarray array,
+  // jboolean *isCopy)
+  llvm::Value *Args[] = {Env, Array, IsCopy};
   return CGF.EmitRuntimeCall(
       createJNIRuntimeFunction(OMPRTL_JNI__GetPrimitiveArrayCritical), Args);
 }
 
-llvm::Value *
-CGOpenMPRuntimeSpark::EmitJNICreateNewTuple(CodeGenFunction &CGF,
-                                            ArrayRef<llvm::Value *> Elements) {
-  // Build call FindClass(JNIEnv *env, const char *name);
-  // TODO: args
-  llvm::Value *Name = nullptr;
-  llvm::Value *ArgsClassObject[] = {Name};
-  llvm::Value *ClassObject = CGF.EmitRuntimeCall(
-      createJNIRuntimeFunction(OMPRTL_JNI__FindClass), ArgsClassObject);
-  // Build call GetMethodID(jclass clazz, const char *name, const char *sig);
-  // TODO: args
-  llvm::Value *InitName = nullptr;
-  llvm::Value *Sig = nullptr;
-  llvm::Value *ArgsMethodId[] = {ClassObject, InitName, Sig};
-  llvm::Value *MethodId = CGF.EmitRuntimeCall(
-      createJNIRuntimeFunction(OMPRTL_JNI__GetMethodID), ArgsMethodId);
-  // T
-  SmallVector<llvm::Constant *, 16> ConstElements;
-  for (auto E : Elements)
-    ConstElements.push_back(cast<llvm::Constant>(E));
-  // Build call NewObject(jclass clazz, jmethodID methodID, ...)
-  auto *ElementArray = llvm::ConstantArray::get(
-      llvm::ArrayType::get(jobjectTy, Elements.size()), ConstElements);
-  llvm::Value *Args[] = {ClassObject, MethodId, ElementArray};
-  return CGF.EmitRuntimeCall(createJNIRuntimeFunction(OMPRTL_JNI__NewObject),
-                             Args);
+llvm::Value *CGOpenMPRuntimeSpark::EmitJNICreateNewTuple(
+    CodeGenFunction &CGF, llvm::Value *Env, ArrayRef<llvm::Value *> Elements) {
+  auto *Size = CGF.Builder.getInt32(Elements.size());
+  llvm::Value *Array = CGF.Builder.CreateAlloca(jbyteArrayTy, Size);
+  for (unsigned i = 0; i < Elements.size(); i++) {
+    llvm::Value *CurrIndex = CGF.Builder.getInt32(i);
+    llvm::Value *CurrElement =
+        CGF.Builder.CreateBitCast(Elements[i], jbyteArrayTy);
+    llvm::Value *GepPtr = CGF.Builder.CreateGEP(Array, CurrIndex);
+    CGF.Builder.CreateAlignedStore(CurrElement, GepPtr, CGF.getPointerAlign());
+  }
+  llvm::Value *Args[] = {Env, Size, Array};
+  return CGF.EmitRuntimeCall(
+      createJNIRuntimeFunction(OMPRTL_JNI__CreateNewTuple), Args);
 }

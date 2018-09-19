@@ -145,7 +145,7 @@ int CGOpenMPRuntimeSpark::OMPSparkMappingInfo::_NextId = 0;
 
 CGOpenMPRuntimeSpark::CGOpenMPRuntimeSpark(CodeGenModule &CGM)
     : CGOpenMPRuntime(CGM) {
-  llvm::errs() << "CGOpenMPRuntimeSpark\n";
+  llvm::errs() << "Constructor of CGOpenMPRuntimeSpark\n";
   if (!CGM.getLangOpts().OpenMPIsDevice)
     llvm_unreachable("OpenMP Spark can only handle device code.");
 }
@@ -155,6 +155,7 @@ void CGOpenMPRuntimeSpark::emitTargetOutlinedFunction(
     llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
     bool IsOffloadEntry, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel) {
+
   llvm::errs() << "CGOpenMPRuntimeSpark::emitTargetOutlinedFunction\n";
   assert(!ParentName.empty() && "Invalid target region parent name!");
 
@@ -168,6 +169,106 @@ void CGOpenMPRuntimeSpark::emitTargetOutlinedFunction(
   OutlinedFn->removeFnAttr(llvm::Attribute::OptimizeNone);
 
   EmitSparkJob();
+}
+
+llvm::Function *
+CGOpenMPRuntimeSpark::outlineTargetDirective(const OMPExecutableDirective &D,
+                                             StringRef Name,
+                                             const RegionCodeGenTy &CodeGen) {
+  llvm::errs() << "CGOpenMPRuntimeSpark::outlineTargetDirective\n";
+  // Generate the outlined function for the target directive.  Wrap it around
+  // the offload kernel.  The offload kernel includes NVPTX specific parameters.
+  SmallString<256> Buffer;
+  llvm::raw_svector_ostream Out(Buffer);
+  Out << Name << "_impl_michel__";
+  llvm::Function *OutlinedFn =
+      CGOpenMPRuntime::outlineTargetDirective(D, Out.str(), CodeGen);
+  OutlinedFn->removeFnAttr(llvm::Attribute::NoInline);
+  OutlinedFn->addFnAttr(llvm::Attribute::AlwaysInline);
+  OutlinedFn->setLinkage(llvm::GlobalValue::InternalLinkage);
+
+  //
+  // Add device specific parameters to a target region's outlined function.
+  // These parameters are added to all target regions.  Arguments for these
+  // parameters are passed in by the offload library.
+  //
+  CodeGenFunction WrapperCGF(CGM, /*suppressNewContext=*/true);
+  auto &Ctx = WrapperCGF.getContext();
+  const auto *PCS = cast<CapturedStmt>(D.getAssociatedStmt());
+  if (D.hasClausesOfKind<OMPDependClause>())
+    PCS = cast<CapturedStmt>(PCS->getCapturedStmt());
+  const CapturedStmt &CS = *PCS;
+  // When a target region has a depend clause, generate a new task
+  // that contains the target region invocation, instead of generating it in
+  // place. The task will take care of the depend logic.
+  bool HasDependClause = D.hasClausesOfKind<OMPDependClause>();
+  bool UseCapturedArgumentsOnly =
+      isOpenMPParallelDirective(D.getDirectiveKind()) ||
+      isOpenMPTeamsDirective(D.getDirectiveKind()) || HasDependClause;
+  FunctionArgList Args;
+  WrapperCGF.GenerateOpenMPCapturedStmtParameters(
+      CS, UseCapturedArgumentsOnly, /*CaptureLevel=*/1, /*ImplicitParamStop=*/0,
+      CGM.getCodeGenOpts().OpenmpNonaliasedMaps, /*UIntPtrCastRequired=*/true,
+      Args);
+
+  unsigned arg_nb = Args.size();
+
+  for (unsigned i = 0; i < arg_nb; i++) {
+    IdentifierInfo *II = Args[i]->getIdentifier();
+    auto *Arg =
+        ImplicitParamDecl::Create(Ctx, Ctx.VoidPtrTy, ImplicitParamDecl::Other);
+    Args.emplace_back(Arg);
+  }
+
+  FunctionType::ExtInfo ExtInfo;
+  const CGFunctionInfo &FuncInfo =
+      CGM.getTypes().arrangeBuiltinFunctionDeclaration(Ctx.VoidTy, Args);
+  llvm::FunctionType *FuncLLVMTy = CGM.getTypes().GetFunctionType(FuncInfo);
+  llvm::Function *WrapperFn = llvm::Function::Create(
+      FuncLLVMTy, llvm::GlobalValue::InternalLinkage, Name, &CGM.getModule());
+  const CapturedDecl *CD = CS.getCapturedDecl();
+  CGM.SetInternalFunctionAttributes(CD, WrapperFn, FuncInfo);
+  if (CD->isNothrow())
+    WrapperFn->setDoesNotThrow();
+
+  WrapperCGF.StartFunction(CD, Ctx.VoidTy, WrapperFn, FuncInfo, Args,
+                           CS.getLocStart(), CD->getBody()->getLocStart());
+
+  // Call the base outlined function to execute the target region.
+  llvm::SmallVector<llvm::Value *, 4> CallArgs;
+  for (unsigned i = 0; i < arg_nb; i++) {
+    auto *Arg = Args[i];
+    auto *ArgId = Args[arg_nb + i];
+    Address LocalAddr = WrapperCGF.GetAddrOfLocalVar(Arg);
+    LValue ArgLVal = WrapperCGF.MakeAddrLValue(LocalAddr, Arg->getType(),
+                                               AlignmentSource::Decl);
+    llvm::Value *Val =
+        WrapperCGF.EmitLoadOfLValue(ArgLVal, Arg->getLocation()).getScalarVal();
+    CallArgs.emplace_back(Val);
+
+    llvm::Value *ScalaId =
+        WrapperCGF.Builder.getInt32(VarNameToScalaID[Arg->getNameAsString()]);
+
+    Address LocalAddrId = WrapperCGF.GetAddrOfLocalVar(ArgId);
+    LValue ArgLValId = WrapperCGF.MakeAddrLValue(LocalAddrId, ArgId->getType(),
+                                                 AlignmentSource::Decl);
+    llvm::Value *ValId =
+        WrapperCGF.EmitLoadOfLValue(ArgLValId, Arg->getLocation())
+            .getScalarVal();
+
+    QualType dstType = Ctx.getPointerType(Ctx.IntTy);
+    llvm::Value *CastValId = WrapperCGF.EmitScalarConversion(
+        ValId, Ctx.VoidPtrTy, dstType, Arg->getLocation());
+
+    LValue CastValIdLvalue =
+        WrapperCGF.MakeNaturalAlignPointeeAddrLValue(CastValId, dstType);
+
+    WrapperCGF.EmitStoreOfScalar(ScalaId, CastValIdLvalue.getAddress(), false,
+                                 Ctx.IntTy);
+  }
+
+  WrapperCGF.FinishFunction();
+  return WrapperFn;
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::emitParallelOutlinedFunction(
@@ -311,7 +412,7 @@ void CGOpenMPRuntimeSpark::EmitSparkJob() {
              << "    \n"
              << "    val info = new CloudInfo(args)\n"
              << "    val fs = new CloudFileSystem(info.fs, args(3), args(4))\n"
-             << "    val at = AddressTable.create(fs)\n"
+             << "    val at = new AddressTable(fs)\n"
              << "    info.init(fs)\n"
              << "    \n"
              << "    import info.sqlContext.implicits._\n"
@@ -356,9 +457,8 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     const OMPLoopDirective *OMPLoop = info.OMPDirective;
 
     llvm::errs() << "Native 1\n";
-    llvm::errs() << "NbOutput = " << info.Outputs.size() << " + "
-                 << info.InputsOutputs.size() << "\n";
-    unsigned NbOutputs = info.Outputs.size() + info.InputsOutputs.size();
+    unsigned NbOutputs = info.AllOutputs.size();
+    llvm::errs() << "NbOutput = " << NbOutputs << "\n";
 
     llvm::errs() << "Native 2\n";
     SPARK_FILE << "  @native def mappingMethod" << info.Identifier << "(";
@@ -378,21 +478,9 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     }
     llvm::errs() << "Native 3.5\n";
 
-    i = 0;
-    for (auto it = info.Inputs.begin(); it != info.Inputs.end(); ++it, i++) {
+    for (unsigned i = 0; i < info.AllArgs.size(); i++) {
       llvm::errs() << "Native 4\n";
 
-      // Separator
-      SPARK_FILE << ", ";
-      SPARK_FILE << "n" << i << ": Array[Byte]";
-    }
-    for (auto it = info.InputsOutputs.begin(); it != info.InputsOutputs.end();
-         ++it, i++) {
-      // Separator
-      SPARK_FILE << ", ";
-      SPARK_FILE << "n" << i << ": Array[Byte]";
-    }
-    for (auto it = info.Outputs.begin(); it != info.Outputs.end(); ++it, i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
@@ -420,19 +508,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
 
       SPARK_FILE << "index" << i << ": Long, bound" << i << ": Long";
     }
-    i = 0;
-    for (auto it = info.Inputs.begin(); it != info.Inputs.end(); ++it, i++) {
-      // Separator
-      SPARK_FILE << ", ";
-      SPARK_FILE << "n" << i << ": Array[Byte]";
-    }
-    for (auto it = info.InputsOutputs.begin(); it != info.InputsOutputs.end();
-         ++it, i++) {
-      // Separator
-      SPARK_FILE << ", ";
-      SPARK_FILE << "n" << i << ": Array[Byte]";
-    }
-    for (auto it = info.Outputs.begin(); it != info.Outputs.end(); ++it, i++) {
+    for (unsigned i = 0; i < info.AllArgs.size(); i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i << ": Array[Byte]";
@@ -458,19 +534,7 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
 
       SPARK_FILE << "index" << i << ", bound" << i;
     }
-    i = 0;
-    for (auto it = info.Inputs.begin(); it != info.Inputs.end(); ++it, i++) {
-      // Separator
-      SPARK_FILE << ", ";
-      SPARK_FILE << "n" << i;
-    }
-    for (auto it = info.InputsOutputs.begin(); it != info.InputsOutputs.end();
-         ++it, i++) {
-      // Separator
-      SPARK_FILE << ", ";
-      SPARK_FILE << "n" << i;
-    }
-    for (auto it = info.Outputs.begin(); it != info.Outputs.end(); ++it, i++) {
+    for (unsigned i = 0; i < info.AllArgs.size(); i++) {
       // Separator
       SPARK_FILE << ", ";
       SPARK_FILE << "n" << i;
@@ -547,11 +611,12 @@ public:
 
   void VisitDeclRefExpr(const DeclRefExpr *Node) {
     const VarDecl *VD = dyn_cast<VarDecl>(Node->getDecl());
+
     if (Info.CounterInfo.find(VD) != Info.CounterInfo.end()) {
       SPARK_FILE << CntStr;
     } else {
       SPARK_FILE << "ByteBuffer.wrap(";
-      SPARK_FILE << "__ompcloud_offload_" + VD->getName().str();
+      SPARK_FILE << CGOpenMPRuntimeSpark::getSparkVarName(VD);
       // FIXME: How about long ?
       SPARK_FILE << ").order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt";
     }
@@ -559,7 +624,17 @@ public:
 };
 
 std::string CGOpenMPRuntimeSpark::getSparkVarName(const ValueDecl *VD) {
-  return "__ompcloud_offload_" + VD->getName().str();
+  std::string Prefix = "__ompcloud_offload_";
+
+  // If this is an OpenMP capture declaration, we need to look at the
+  // original declaration.
+  const ValueDecl *OrigVD = VD;
+
+  if (auto *OD = dyn_cast<OMPCapturedExprDecl>(OrigVD))
+    if (auto *DRE = dyn_cast<DeclRefExpr>(OD->getInit()->IgnoreImpCasts()))
+      OrigVD = cast<VarDecl>(DRE->getDecl());
+
+  return Prefix + OrigVD->getName().str();
 }
 
 void CGOpenMPRuntimeSpark::EmitSparkInput(llvm::raw_fd_ostream &SPARK_FILE) {
@@ -567,13 +642,11 @@ void CGOpenMPRuntimeSpark::EmitSparkInput(llvm::raw_fd_ostream &SPARK_FILE) {
 
   bool verbose = VERBOSE;
   auto &IndexMap = OffloadingMapVarsIndex;
-  auto &TypeMap = OffloadingMapVarsType;
 
   SPARK_FILE << "    // Read each input from the storage\n";
   for (auto it = IndexMap.begin(); it != IndexMap.end(); ++it) {
     const ValueDecl *VD = it->first;
-    int OffloadId = IndexMap[VD];
-    unsigned OffloadType = TypeMap[VD];
+    unsigned OffloadId = IndexMap[VD];
     bool NeedBcast = VD->getType()->isAnyPointerType();
 
     // Find the bit size of one element
@@ -584,27 +657,12 @@ void CGOpenMPRuntimeSpark::EmitSparkInput(llvm::raw_fd_ostream &SPARK_FILE) {
     }
     int64_t SizeInByte = CGM.getContext().getTypeSize(VarType) / 8;
 
-    SPARK_FILE << "    val sizeOf_" << getSparkVarName(VD) << " = at.get("
+    SPARK_FILE << "    val sizeOf_" << getSparkVarName(VD) << " = at.getSize("
                << OffloadId << ")\n";
     SPARK_FILE << "    val eltSizeOf_" << getSparkVarName(VD) << " = "
                << SizeInByte << "\n";
-
-    if (OffloadType == OMPC_MAP_to ||
-        OffloadType == (OMPC_MAP_to | OMPC_MAP_from)) {
-
-      SPARK_FILE << "    var " << getSparkVarName(VD) << " = fs.read("
-                 << OffloadId << ", sizeOf_" << getSparkVarName(VD) << ")\n";
-
-    } else if (OffloadType == OMPC_MAP_from || OffloadType == OMPC_MAP_alloc) {
-      SPARK_FILE << "    var " << getSparkVarName(VD)
-                 << " = new Array[Byte](sizeOf_" << getSparkVarName(VD)
-                 << ")\n";
-    }
-
-    if (verbose)
-      SPARK_FILE << "    println(\"XXXX DEBUG XXXX SizeOf "
-                 << getSparkVarName(VD) << "= \" + sizeOf_"
-                 << getSparkVarName(VD) << ")\n";
+    SPARK_FILE << "    var " << getSparkVarName(VD) << " = at.init("
+               << OffloadId << ")\n";
 
     if (NeedBcast)
       SPARK_FILE << "    var " << getSparkVarName(VD)
@@ -624,7 +682,6 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
 
   bool verbose = VERBOSE;
   auto &IndexMap = OffloadingMapVarsIndex;
-  auto &TypeMap = OffloadingMapVarsType;
   const OMPLoopDirective *OMPLoop = info.OMPDirective;
   unsigned MappingId = info.Identifier;
   SparkExprPrinter MappingPrinter(SPARK_FILE, CGM.getContext(), info,
@@ -646,14 +703,9 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
         auto it_step = OMPLoop->counter_steps().begin();
         auto it_num = OMPLoop->counter_num_iterations().begin();
 
-        llvm::errs() << "TEST 1\n";
-
-        CntDecl->dump();
         const Expr *Init = *it_init;
         const Expr *Num = *it_num;
         const Expr *Step = *it_step;
-
-        llvm::errs() << "TEST 2\n";
 
         SPARK_FILE << "    val bound_" << MappingId << "_" << NbIndex << " = ";
         MappingPrinter.PrintExpr(Init);
@@ -663,19 +715,24 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
         MappingPrinter.PrintExpr(Num);
         SPARK_FILE << ".toLong\n";
 
+        // FIXME: Should be the schedule if there is one defined in the clause
         SPARK_FILE << "    val blockSize_" << MappingId << "_" << NbIndex
-                   << " = ((bound_" << MappingId << "_" << NbIndex
-                   << ").toFloat/_parallelism).floor.toLong\n";
+                   << " = if(info.schedulingSize <= 0) ((bound_" << MappingId
+                   << "_" << NbIndex
+                   << ").toFloat/_parallelism).floor.toLong else "
+                      "info.schedulingSize\n";
 
-        llvm::errs() << "TEST 3\n";
-
-        SPARK_FILE << "    val index_" << MappingId << "_" << NbIndex << " = (";
+        SPARK_FILE << "    val list_index_" << MappingId << "_" << NbIndex
+                   << " = (";
         MappingPrinter.PrintExpr(Init);
         SPARK_FILE << ".toLong to bound_" << MappingId << "_" << NbIndex;
-        SPARK_FILE << " by blockSize_" << MappingId << "_" << NbIndex << ")";
-        SPARK_FILE << " // Index " << CntDecl->getName() << "\n";
-
-        llvm::errs() << "TEST 4\n";
+        SPARK_FILE << "-1 by blockSize_" << MappingId << "_" << NbIndex << ")";
+        SPARK_FILE << " // List of Index " << CntDecl->getName() << "\n";
+        SPARK_FILE << "    val index_" << MappingId << "_" << NbIndex
+                   << " = info.sc.parallelize(list_index_" << MappingId << "_"
+                   << NbIndex << ", if(info.isDynamic) list_index_" << MappingId
+                   << "_" << NbIndex << ".size else _parallelism.toInt).toDS()";
+        SPARK_FILE << " // Dataset of Index " << CntDecl->getName() << "\n";
 
         if (verbose) {
           SPARK_FILE << "    println(\"XXXX DEBUG XXXX blockSize = "
@@ -685,6 +742,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
                      << MappingId << "_" << NbIndex << ")\n";
         }
         NbIndex++;
+
         it_init++, it_step++, it_num++;
       }
   }
@@ -693,14 +751,14 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
 
   // We need to explicitly create Tuple1 if there is no ranged input.
   int NumberOfRangedInput = 0;
-  for (auto it = info.InVarUse.begin(); it != info.InVarUse.end(); ++it)
-    if (const OMPArraySectionExpr *Range = info.RangedVar[it->first])
+  for (auto Input : info.StrictlyInputs)
+    if (const OMPArraySectionExpr *Range = info.RangedVar[Input])
       NumberOfRangedInput++;
-  for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end(); ++it)
-    if (const OMPArraySectionExpr *Range = info.RangedVar[it->first])
+  for (auto InOutput : info.BothInputsOutputs)
+    if (const OMPArraySectionExpr *Range = info.RangedVar[InOutput])
       NumberOfRangedInput++;
-  for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it)
-    if (const OMPArraySectionExpr *Range = info.RangedVar[it->first])
+  for (auto Output : info.StrictlyOutputs)
+    if (const OMPArraySectionExpr *Range = info.RangedVar[Output])
       NumberOfRangedInput++;
 
   SparkExprPrinter InputStartRangePrinter(SPARK_FILE, CGM.getContext(), info,
@@ -720,37 +778,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
     SPARK_FILE << "Tuple1(x)";
   } else {
     SPARK_FILE << "(x";
-    for (auto it = info.InVarUse.begin(); it != info.InVarUse.end(); ++it) {
-      const VarDecl *VD = it->first;
-      if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
-        // Separator
-        SPARK_FILE << ", ";
-        SPARK_FILE << getSparkVarName(VD);
-        SPARK_FILE << ".slice((";
-        InputStartRangePrinter.PrintExpr(Range->getLowerBound());
-        SPARK_FILE << ") * eltSizeOf_" << getSparkVarName(VD) << ", Math.min((";
-        InputEndRangePrinter.PrintExpr(Range->getLength());
-        SPARK_FILE << ") * eltSizeOf_" << getSparkVarName(VD) << ", sizeOf_"
-                   << getSparkVarName(VD) << "))";
-      }
-    }
-    for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end();
-         ++it) {
-      const VarDecl *VD = it->first;
-      if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
-        // Separator
-        SPARK_FILE << ", ";
-        SPARK_FILE << getSparkVarName(VD);
-        SPARK_FILE << ".slice((";
-        InputStartRangePrinter.PrintExpr(Range->getLowerBound());
-        SPARK_FILE << ") * eltSizeOf_" << getSparkVarName(VD) << ", Math.min((";
-        InputEndRangePrinter.PrintExpr(Range->getLength());
-        SPARK_FILE << ") * eltSizeOf_" << getSparkVarName(VD) << ", sizeOf_"
-                   << getSparkVarName(VD) << "))";
-      }
-    }
-    for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it) {
-      const VarDecl *VD = it->first;
+    for (auto VD : info.AllArgs) {
       if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
         // Separator
         SPARK_FILE << ", ";
@@ -765,7 +793,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
     }
     SPARK_FILE << ")";
   }
-  SPARK_FILE << "}.toDS()\n"; // FIXME: Inverse with more indexes
+  SPARK_FILE << "}\n"; // FIXME: Inverse with more indexes
 
   llvm::errs() << "Print mapping operations \n";
 
@@ -777,9 +805,9 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
   // x = (index, sliceOfInput1, sliceOfInput2, ...)
   int i = 1;
   NbIndex = 0;
-  for (auto it = info.CounterUse.begin(); it != info.CounterUse.end(); ++it) {
+  for (auto it = info.CounterInfo.begin(); it != info.CounterInfo.end(); ++it) {
     // Separator
-    if (it != info.CounterUse.begin())
+    if (it != info.CounterInfo.begin())
       SPARK_FILE << ", ";
     SPARK_FILE << "x._" << i << ", Math.min(x._" << i << "+blockSize_"
                << MappingId << "_" << NbIndex << "-1, bound_" << MappingId
@@ -787,8 +815,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
     i++;
   }
 
-  for (auto it = info.InVarUse.begin(); it != info.InVarUse.end(); ++it) {
-    const VarDecl *VD = it->first;
+  for (auto VD : info.StrictlyInputs) {
     bool NeedBcast = VD->getType()->isAnyPointerType();
     // Separator
     SPARK_FILE << ", ";
@@ -799,22 +826,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
     else
       SPARK_FILE << getSparkVarName(VD) << ".clone";
   }
-  for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end(); ++it) {
-    const VarDecl *VD = it->first;
-    bool NeedBcast = VD->getType()->isAnyPointerType();
-    // Separator
-    SPARK_FILE << ", ";
-    if (const OMPArraySectionExpr *Range = info.RangedVar[VD])
-      SPARK_FILE << "x._" << i++;
-    else if (NeedBcast)
-      // FIXME: Additional copy but avoid error when using multiple thread on
-      // the same worker node
-      SPARK_FILE << getSparkVarName(VD) << "_bcast.value.clone";
-    else
-      SPARK_FILE << getSparkVarName(VD) << ".clone";
-  }
-  for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it) {
-    const VarDecl *VD = it->first;
+  for (auto VD : info.AllOutputs) {
     bool NeedBcast = VD->getType()->isAnyPointerType();
     // Separator
     SPARK_FILE << ", ";
@@ -830,7 +842,7 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
 
   SPARK_FILE << ")) }\n";
 
-  unsigned NbOutputs = info.OutVarDef.size() + info.InOutVarUse.size();
+  unsigned NbOutputs = info.AllOutputs.size();
   if (NbOutputs > 1) {
     SPARK_FILE << "    // cache not to perform the mapping for each output\n";
     SPARK_FILE << "    mapres_" << MappingId << ".cache\n";
@@ -842,10 +854,11 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
 
   i = 0;
 
-  for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it) {
-    const VarDecl *VD = it->first;
+  for (auto VD : info.AllOutputs) {
     bool NeedBcast = VD->getType()->isAnyPointerType();
     const OMPArraySectionExpr *Range = info.RangedVar[VD];
+
+    // FIXME: ALLOC variable should not treated
 
     SPARK_FILE << "    ";
     if (Range)
@@ -908,75 +921,6 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
     i++;
   }
 
-  for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end(); ++it) {
-    const VarDecl *VD = it->first;
-    bool NeedBcast = VD->getType()->isAnyPointerType();
-    const OMPArraySectionExpr *Range = info.RangedVar[VD];
-    unsigned OffloadType = TypeMap[VD];
-
-    if ((OffloadType == OMPC_MAP_alloc) && isLast)
-      continue;
-
-    SPARK_FILE << "    ";
-    if (Range)
-      SPARK_FILE << "val " << getSparkVarName(VD) << "_tmp_" << MappingId;
-    else
-      SPARK_FILE << getSparkVarName(VD);
-    SPARK_FILE << " = ";
-
-    SPARK_FILE << "mapres_" << MappingId;
-
-    if (NbOutputs == 1) {
-      // 1 output -> return the result directly
-    } else if (NbOutputs == 2 || NbOutputs == 3) {
-      // 2 or 3 outputs -> extract each variable from the Tuple2 or Tuple3
-      SPARK_FILE << ".map{ x => (x._1, x._2._" << i + 1 << ") }";
-    } else {
-      // More than 3 outputs -> extract each variable from the Collection
-      SPARK_FILE << ".map{ x => (x._1, x._2(" << i << ")) }";
-    }
-    //    if (std::find(info.ReducedVar.begin(), info.ReducedVar.end(), VD) !=
-    //        info.ReducedVar.end())
-    //      SPARK_FILE << ".map{ x => x._2 }.reduce{(x, y) => new "
-    //                    "OmpKernel().reduce"
-    //                 << VD->getName() << MappingId << "(x, y)}";
-    //    else
-    if (Range)
-      SPARK_FILE << ".collect()";
-    else
-      SPARK_FILE << ".map{ x => x._2 "
-                    "}.repartition(info.getExecutorNumber.toInt).reduce{(x, y) "
-                    "=> Util.bitor(x, y)}";
-    SPARK_FILE << "\n";
-
-    if (Range) {
-      SparkExprPrinter RangePrinter(SPARK_FILE, CGM.getContext(), info,
-                                    getSparkVarName(VD) + std::string("_tmp_") +
-                                        std::to_string(MappingId) +
-                                        std::string("(i)._1.toInt"));
-
-      SPARK_FILE << "    " << getSparkVarName(VD)
-                 << " = new Array[Byte](sizeOf_" << getSparkVarName(VD)
-                 << ")\n";
-      SPARK_FILE << "    i = 0\n";
-      SPARK_FILE << "    while (i < " << getSparkVarName(VD) << "_tmp_"
-                 << MappingId << ".length) {\n";
-      SPARK_FILE << "      " << getSparkVarName(VD) << "_tmp_" << MappingId
-                 << "(i)._2.copyToArray(" << getSparkVarName(VD) << ", (";
-      RangePrinter.PrintExpr(Range->getLowerBound());
-      SPARK_FILE << ") * eltSizeOf_" << getSparkVarName(VD) << ")\n"
-                 << "      i += 1\n"
-                 << "    }\n";
-    }
-
-    if (NeedBcast && !isLast)
-      SPARK_FILE << "    " << getSparkVarName(VD) << "_bcast.destroy\n"
-                 << "    " << getSparkVarName(VD)
-                 << "_bcast = info.sc.broadcast(" << getSparkVarName(VD)
-                 << ")\n";
-
-    i++;
-  }
   SPARK_FILE << "\n";
 }
 
@@ -984,20 +928,14 @@ void CGOpenMPRuntimeSpark::EmitSparkOutput(llvm::raw_fd_ostream &SPARK_FILE) {
   llvm::errs() << "EmitSparkOutput\n";
 
   auto &IndexMap = OffloadingMapVarsIndex;
-  auto &TypeMap = OffloadingMapVarsType;
 
   SPARK_FILE << "    // Write the results back into the storage\n";
 
   for (auto it = IndexMap.begin(); it != IndexMap.end(); ++it) {
     const ValueDecl *VD = it->first;
-    int OffloadId = IndexMap[VD];
-    unsigned OffloadType = TypeMap[VD];
-
-    if (OffloadType == OMPC_MAP_from ||
-        OffloadType == (OMPC_MAP_to | OMPC_MAP_from)) {
-      SPARK_FILE << "    fs.write(" << OffloadId << ", sizeOf_"
-                 << getSparkVarName(VD) << ", " << getSparkVarName(VD) << ")\n";
-    }
+    unsigned OffloadId = IndexMap[VD];
+    SPARK_FILE << "    at.finalize(" << OffloadId << ", " << getSparkVarName(VD)
+               << ")\n";
   }
 }
 
@@ -1044,24 +982,28 @@ public:
     TraverseStmt(S);
 
     llvm::errs() << "Inputs =";
-    for (auto In : Info.Inputs) {
-      Info.InVarUse[In].append(MapVarToExpr[In].begin(),
-                               MapVarToExpr[In].end());
+    for (auto In : Info.StrictlyInputs) {
       llvm::errs() << " " << In->getName();
-    }
-    llvm::errs() << "\n";
-    llvm::errs() << "Outputs =";
-    for (auto Out : Info.Outputs) {
-      Info.OutVarDef[Out].append(MapVarToExpr[Out].begin(),
-                                 MapVarToExpr[Out].end());
-      llvm::errs() << " " << Out->getName();
+      SparkRuntime.addOffloadingMapVariable(In);
+      Info.AllInputs.insert(In);
+      Info.AllArgs.insert(In);
     }
     llvm::errs() << "\n";
     llvm::errs() << "InputsOutputs =";
-    for (auto InOut : Info.InputsOutputs) {
-      Info.InOutVarUse[InOut].append(MapVarToExpr[InOut].begin(),
-                                     MapVarToExpr[InOut].end());
+    for (auto InOut : Info.BothInputsOutputs) {
       llvm::errs() << " " << InOut->getName();
+      SparkRuntime.addOffloadingMapVariable(InOut);
+      Info.AllInputs.insert(InOut);
+      Info.AllOutputs.insert(InOut);
+      Info.AllArgs.insert(InOut);
+    }
+    llvm::errs() << "\n";
+    llvm::errs() << "Outputs =";
+    for (auto Out : Info.StrictlyOutputs) {
+      llvm::errs() << " " << Out->getName();
+      SparkRuntime.addOffloadingMapVariable(Out);
+      Info.AllOutputs.insert(Out);
+      Info.AllArgs.insert(Out);
     }
     llvm::errs() << "\n";
   }
@@ -1195,7 +1137,6 @@ public:
         llvm::errs() << ">>> Found RefExpr = " << VD->getName() << " --> ";
 
       if (Info.CounterInfo.find(VD) != Info.CounterInfo.end()) {
-        Info.CounterUse[VD].push_back(D);
         if (verbose)
           llvm::errs() << "is cnt\n";
         return true;
@@ -1208,29 +1149,15 @@ public:
         return true;
       }
 
-      int MapType = SparkRuntime.getMapType(VD);
-      if (MapType == -1) {
-        if (VD->hasGlobalStorage()) {
-          if (verbose)
-            llvm::errs() << "is global\n";
-          return true;
-        }
-
-        // FIXME: That should be detected before
-        if (verbose)
-          llvm::errs() << "assume input (not in clause)";
-        SparkRuntime.addOffloadingMapVariable(
-            VD, OpenMPOffloadMappingFlags::OMP_MAP_TO);
-        MapType = SparkRuntime.getMapType(VD);
-      }
-
-      bool currInput = std::find(Info.Inputs.begin(), Info.Inputs.end(), VD) !=
-                       Info.Inputs.end();
-      bool currOutput = std::find(Info.Outputs.begin(), Info.Outputs.end(),
-                                  VD) != Info.Outputs.end();
-      bool currInputOutput =
-          std::find(Info.InputsOutputs.begin(), Info.InputsOutputs.end(), VD) !=
-          Info.InputsOutputs.end();
+      bool currInput =
+          std::find(Info.StrictlyInputs.begin(), Info.StrictlyInputs.end(),
+                    VD) != Info.StrictlyInputs.end();
+      bool currOutput =
+          std::find(Info.StrictlyOutputs.begin(), Info.StrictlyOutputs.end(),
+                    VD) != Info.StrictlyOutputs.end();
+      bool currInputOutput = std::find(Info.BothInputsOutputs.begin(),
+                                       Info.BothInputsOutputs.end(),
+                                       VD) != Info.BothInputsOutputs.end();
 
       MapVarToExpr[VD].push_back(D);
 
@@ -1240,10 +1167,10 @@ public:
         if (currInputOutput) {
           ;
         } else if (currOutput) {
-          Info.Outputs.erase(VD);
-          Info.InputsOutputs.insert(VD);
+          Info.StrictlyOutputs.erase(VD);
+          Info.BothInputsOutputs.insert(VD);
         } else {
-          Info.Inputs.insert(VD);
+          Info.StrictlyInputs.insert(VD);
         }
       } else if (current_use == Def) {
         if (verbose)
@@ -1251,17 +1178,17 @@ public:
         if (currInputOutput) {
           ;
         } else if (currInput) {
-          Info.Inputs.erase(VD);
-          Info.InputsOutputs.insert(VD);
+          Info.StrictlyInputs.erase(VD);
+          Info.BothInputsOutputs.insert(VD);
         } else {
-          Info.Outputs.insert(VD);
+          Info.StrictlyOutputs.insert(VD);
         }
       } else if (current_use == UseDef) {
         if (verbose)
           llvm::errs() << " is UseDef";
-        Info.Inputs.erase(VD);
-        Info.Outputs.erase(VD);
-        Info.InputsOutputs.insert(VD);
+        Info.StrictlyInputs.erase(VD);
+        Info.StrictlyOutputs.erase(VD);
+        Info.BothInputsOutputs.insert(VD);
       } else {
         if (verbose)
           llvm::errs() << " is Nothing ???";
@@ -1674,37 +1601,16 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   //    if (*I && (*I)->getClauseKind() == OMPC_reduction)
   //      GenerateReductionKernel(cast<OMPReductionClause>(*(*I)), S);
 
-  auto &typeMap = OffloadingMapVarsType;
-  auto &indexMap = OffloadingMapVarsIndex;
-
   llvm::errs() << "NUMBER OF COUNTERS == " << ForDirective.counters().size()
                << "\n";
 
   SparkMappingFunctions.push_back(OMPSparkMappingInfo(&ForDirective));
   OMPSparkMappingInfo &info = SparkMappingFunctions.back();
 
-  llvm::errs() << "NUMBER OF COUNTERS 2 == "
-               << info.OMPDirective->counters().size() << "\n";
-
-  llvm::errs() << "NUMBER OF COUNTERS 3 == "
-               << SparkMappingFunctions.back().OMPDirective->counters().size()
-               << "\n";
-
   llvm::errs() << "--- MappingFunction ID = " << info.Identifier << "\n";
-
-  llvm::errs() << "--- MappingFunction ID = "
-               << SparkMappingFunctions.back().Identifier << "\n";
 
   llvm::errs() << "--- MappingFunction Size = " << SparkMappingFunctions.size()
                << "\n";
-
-  if (verbose)
-    llvm::errs() << "Offloaded variables \n";
-  for (auto iter = typeMap.begin(); iter != typeMap.end(); ++iter) {
-    if (verbose)
-      llvm::errs() << iter->first->getName() << " - " << iter->second << " - "
-                   << indexMap[iter->first] << "\n";
-  }
 
   const Stmt *Body = S.getAssociatedStmt();
   Stmt *LoopStmt;
@@ -1764,10 +1670,6 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   FindKernelArguments Finder(CGM, *this, info);
   Finder.Explore(LoopStmt);
 
-  llvm::errs() << "-- SIZE1 = " << info.Outputs.size() << "\n";
-  llvm::errs() << "-- SIZE2 = " << SparkMappingFunctions.back().Outputs.size()
-               << "\n";
-
   // Initialize arguments
   FunctionArgList ArgList;
 
@@ -1787,17 +1689,7 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
         ImplicitParamDecl::Create(Ctx, jlongQTy, ImplicitParamDecl::Other));
   }
 
-  for (auto it = info.InVarUse.begin(); it != info.InVarUse.end(); ++it) {
-    ArgList.push_back(
-        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
-  }
-
-  for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end(); ++it) {
-    ArgList.push_back(
-        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
-  }
-
-  for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it) {
+  for (auto VD : info.AllArgs) {
     ArgList.push_back(
         ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
   }
@@ -1823,19 +1715,6 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   llvm::ConstantPointerNull *const_ptr_null =
       llvm::ConstantPointerNull::get(PointerTy_Int8);
 
-  // Global variable
-  llvm::Value *const_ptr_init =
-      Bld.CreateGlobalStringPtr("<init>", ".str.init");
-  llvm::Value *const_ptr_tuple2 =
-      Bld.CreateGlobalStringPtr("scala/Tuple2", ".str.tuple2");
-  llvm::Value *const_ptr_tuple3 =
-      Bld.CreateGlobalStringPtr("scala/Tuple3", ".str.tuple3");
-  llvm::Value *const_ptr_tuple2_args = Bld.CreateGlobalStringPtr(
-      "(Ljava/lang/Object;Ljava/lang/Object;)V", ".str.tuple2.args");
-  llvm::Value *const_ptr_tuple3_args = Bld.CreateGlobalStringPtr(
-      "(Ljava/lang/Object;Ljava/lang/Object;Ljava/lang/Object;)V",
-      ".str.tuple3.args");
-
   // Create the variables to save the slot, stack, frame and active threads.
   auto ArgsIt = ArgList.begin();
   auto EnvAddr =
@@ -1850,15 +1729,13 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   auto *ptr_env = EnvAddr.getPointer();
 
   // Keep values that have to be used for releasing
-  llvm::SmallVector<std::pair<llvm::Value *, llvm::Value *>, 8> InputsToRelease,
-      ScalarInputsToRelease, InOutputsToRelease, OutputsToRelease;
+  llvm::SmallVector<std::pair<llvm::Value *, llvm::Value *>, 8>
+      InputArraysToRelease, InputScalarsToRelease, OutputArraysToRelease;
   // Keep values that have to be return
   llvm::SmallVector<llvm::Value *, 8> OutputsToReturn;
 
-  Address AddrCntArg = Address::invalid();
-  llvm::Value *CntVal;
-  Address AddrCntBoundArg = Address::invalid();
-  llvm::Value *CntBoundVal;
+  Address CntAddr = Address::invalid();
+  Address CntBoundAddr = Address::invalid();
 
   if (info.CounterInfo.size() > 1) {
     llvm::errs() << "ERROR OmpCloud: Do not support more than 1 iteration "
@@ -1868,37 +1745,40 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
 
   llvm::errs() << "GetCnt\n";
 
-  for (auto it = info.CounterUse.begin(); it != info.CounterUse.end(); ++it) {
-    const VarDecl *VD = it->first;
+  {
+    const VarDecl *VD = info.CounterInfo.begin()->first;
     QualType CntQTy = VD->getType();
     llvm::Type *CntTy = CGM.getTypes().ConvertType(CntQTy);
 
     // Get current value of the loop counter
     // FIXME: Should we cast ??
-    AddrCntArg = CGF.GetAddrOfLocalVar(*ArgsIt);
-    CntVal = CGF.EmitLoadOfScalar(AddrCntArg, /*Volatile=*/false, Ctx.IntTy,
-                                  SourceLocation());
-    Address AddrCnt = CGF.CreateDefaultAlignTempAlloca(CntTy, VD->getName());
-    CGF.EmitStoreOfScalar(Bld.CreateIntCast(CntVal, CntTy, false), AddrCnt,
+    Address ArgCntAddr = CGF.GetAddrOfLocalVar(*ArgsIt);
+    llvm::Value *ArgCntVal = CGF.EmitLoadOfScalar(
+        ArgCntAddr, /*Volatile=*/false, Ctx.IntTy, SourceLocation());
+    CntAddr = CGF.CreateDefaultAlignTempAlloca(CntTy, VD->getName());
+    CGF.EmitStoreOfScalar(Bld.CreateIntCast(ArgCntVal, CntTy, false), CntAddr,
                           /*Volatile=*/false, CntQTy);
 
     ArgsIt++;
 
     // Get current value of the loop bound
     // FIXME: Should we cast ??
-    AddrCntBoundArg = CGF.GetAddrOfLocalVar(*ArgsIt);
-    CntBoundVal = CGF.EmitLoadOfScalar(AddrCntBoundArg, /*Volatile=*/false,
-                                       Ctx.IntTy, SourceLocation());
+    Address ArgCntBoundAddr = CGF.GetAddrOfLocalVar(*ArgsIt);
+    llvm::Value *ArgCntBoundVal = CGF.EmitLoadOfScalar(
+        ArgCntBoundAddr, /*Volatile=*/false, Ctx.IntTy, SourceLocation());
+    CntBoundAddr = CGF.CreateDefaultAlignTempAlloca(CntTy, VD->getName());
+    CGF.EmitStoreOfScalar(Bld.CreateIntCast(ArgCntBoundVal, CntTy, false),
+                          CntBoundAddr,
+                          /*Volatile=*/false, CntQTy);
 
-    info.addOpenMPKernelArgVar(VD, AddrCnt.getPointer());
+    info.addOpenMPKernelArgVar(VD, CntAddr.getPointer());
     ArgsIt++;
   }
 
   llvm::errs() << "GetJObjectFromInput\n";
 
   // Allocate, load and cast input variables (i.e. the arguments)
-  for (auto it = info.InVarUse.begin(); it != info.InVarUse.end(); ++it) {
-    const VarDecl *VD = it->first;
+  for (auto VD : info.StrictlyInputs) {
     QualType varType = VD->getType();
     llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(varType);
 
@@ -1907,28 +1787,27 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
                               (*ArgsIt)->getType()->getAs<PointerType>());
     llvm::Value *JObjectPtr = JObjectAddr.getPointer();
 
-    llvm::Value *valuePtr;
+    llvm::Value *ValPtr;
 
     if (!varType->isAnyPointerType()) {
       llvm::Value *ptr_load_arg =
-          EmitJNIGetByteArrayElements(CGF, JObjectPtr, const_ptr_null);
+          EmitJNIGetByteArrayElements(CGF, ptr_env, JObjectPtr, const_ptr_null);
 
-      ScalarInputsToRelease.push_back(std::make_pair(JObjectPtr, ptr_load_arg));
-      valuePtr = Bld.CreateBitCast(ptr_load_arg, TyObject_arg->getPointerTo());
+      InputScalarsToRelease.push_back(std::make_pair(JObjectPtr, ptr_load_arg));
+      ValPtr = Bld.CreateBitCast(ptr_load_arg, TyObject_arg->getPointerTo());
 
     } else {
-      JObjectPtr->dump();
       llvm::Value *ptr_load_arg = EmitJNIGetPrimitiveArrayCritical(
-          CGF, JObjectPtr,
+          CGF, ptr_env, JObjectPtr,
           llvm::ConstantPointerNull::get(jbooleanTy->getPointerTo()));
 
-      InputsToRelease.push_back(std::make_pair(JObjectPtr, ptr_load_arg));
+      InputArraysToRelease.push_back(std::make_pair(JObjectPtr, ptr_load_arg));
 
       llvm::Value *ptr_casted_arg =
           Bld.CreateBitCast(ptr_load_arg, TyObject_arg);
 
-      valuePtr = Bld.CreateAlloca(TyObject_arg);
-      Bld.CreateAlignedStore(ptr_casted_arg, valuePtr, CGM.getPointerAlign());
+      ValPtr = Bld.CreateAlloca(TyObject_arg);
+      Bld.CreateAlignedStore(ptr_casted_arg, ValPtr, CGM.getPointerAlign());
 
       if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
         llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
@@ -1938,25 +1817,24 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
       }
     }
 
-    info.addOpenMPKernelArgVar(VD, valuePtr);
+    ValPtr->setName(VD->getName());
+    info.addOpenMPKernelArgVar(VD, ValPtr);
     ++ArgsIt;
   }
 
-  llvm::errs() << "GetJObjectFromInputOutput\n";
+  llvm::errs() << "GetJObjectFromInputOutputAndOutput\n";
 
-  // Allocate, load and cast input/output variables (i.e. the arguments)
-  for (auto it = info.InOutVarUse.begin(); it != info.InOutVarUse.end(); ++it) {
-    const VarDecl *VD = it->first;
-
+  // Allocate, load and cast input/output and output variables (i.e. the arguments)
+  for (auto VD : info.AllOutputs) {
     Address JObjectAddr =
         CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
                               (*ArgsIt)->getType()->getAs<PointerType>());
     llvm::Value *JObjectPtr = JObjectAddr.getPointer();
     llvm::Value *ArrayPtr = EmitJNIGetPrimitiveArrayCritical(
-        CGF, JObjectPtr,
+        CGF, ptr_env, JObjectPtr,
         llvm::ConstantPointerNull::get(jbooleanTy->getPointerTo()));
 
-    InOutputsToRelease.push_back(std::make_pair(JObjectPtr, ArrayPtr));
+    OutputArraysToRelease.push_back(std::make_pair(JObjectPtr, ArrayPtr));
     OutputsToReturn.push_back(JObjectPtr);
 
     QualType varType = VD->getType();
@@ -1986,56 +1864,30 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
       }
     }
 
+    ValPtr->setName(VD->getName());
     info.addOpenMPKernelArgVar(VD, ValPtr);
     ++ArgsIt;
   }
 
-  llvm::errs() << "GetJObjectFromOutput\n";
+  // Create the tiled loop (according to the bound value computed in Spark job)
+  CodeGenFunction::JumpDest LoopExit = CGF.getJumpDestInCurrentScope("for.end");
+  llvm::BasicBlock *ExitBlock = LoopExit.getBlock();
 
-  // Allocate output variables
-  for (auto it = info.OutVarDef.begin(); it != info.OutVarDef.end(); ++it) {
-    const VarDecl *VD = it->first;
+  CodeGenFunction::JumpDest Continue =
+      CGF.getJumpDestInCurrentScope("for.cond");
+  llvm::BasicBlock *CondBlock = Continue.getBlock();
+  CGF.EmitBlock(CondBlock);
 
-    Address JObjectAddr =
-        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
-                              (*ArgsIt)->getType()->getAs<PointerType>());
-    llvm::Value *JObjectPtr = JObjectAddr.getPointer();
-    llvm::Value *ArrayPtr =
-        EmitJNIGetPrimitiveArrayCritical(CGF, JObjectPtr, const_ptr_null);
+  llvm::BasicBlock *ForBody = CGF.createBasicBlock("for.body");
 
-    OutputsToRelease.push_back(std::make_pair(JObjectPtr, ArrayPtr));
-    OutputsToReturn.push_back(JObjectPtr);
+  llvm::Value *CntValue =
+      Bld.CreateAlignedLoad(CntAddr.getPointer(), CntAddr.getAlignment());
+  llvm::Value *CntBoundValue =
+      Bld.CreateAlignedLoad(CntBoundAddr.getPointer(), CntAddr.getAlignment());
+  auto *Cond = Bld.CreateICmpULE(CntValue, CntBoundValue);
+  Bld.CreateCondBr(Cond, ForBody, ExitBlock);
 
-    QualType varType = VD->getType();
-    llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(varType);
-
-    llvm::Value *ValPtr;
-
-    if (!varType->isAnyPointerType()) {
-      if (verbose)
-        llvm::errs() << ">Test< " << VD->getName() << " is scalar\n";
-
-      ValPtr = Bld.CreateBitCast(ArrayPtr, TyObject_arg->getPointerTo());
-
-    } else {
-      llvm::Value *CastArrayPtr = Bld.CreateBitCast(ArrayPtr, TyObject_arg);
-
-      ValPtr = Bld.CreateAlloca(TyObject_arg);
-      Bld.CreateAlignedStore(CastArrayPtr, ValPtr,
-                             DL.getPrefTypeAlignment(TyObject_arg));
-
-      if (const OMPArraySectionExpr *Range = info.RangedVar[VD]) {
-        llvm::Value *LowerBound = CGF.EmitScalarExpr(Range->getLowerBound());
-        for (auto it = info.RangedArrayAccess[VD].begin();
-             it != info.RangedArrayAccess[VD].end(); ++it)
-          info.addOpenMPKernelArgRange(*it, LowerBound);
-      }
-    }
-
-    info.addOpenMPKernelArgVar(VD, ValPtr);
-    ++ArgsIt;
-  }
-
+  CGF.EmitBlock(ForBody);
   {
     // Create a separate cleanup scope for the body, in case it is not
     // a compound statement.
@@ -2057,26 +1909,31 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
     llvm::errs() << "End of Loop\n";
   }
 
+  llvm::Value *CurrCntValue =
+      Bld.CreateAlignedLoad(CntAddr.getPointer(), CntAddr.getAlignment());
+  Bld.CreateAlignedStore(Bld.CreateAdd(CurrCntValue, Bld.getInt32(1)),
+                         CntAddr.getPointer(), CntAddr.getAlignment());
+
+  CGF.EmitBranch(CondBlock);
+
+  CGF.EmitBlock(LoopExit.getBlock());
+
   llvm::errs() << "Release bytearrays\n";
   // Release JNI arrays
-  for (auto it = InputsToRelease.begin(); it != InputsToRelease.end(); ++it)
-    EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
+  for (auto Pair : InputArraysToRelease)
+    EmitJNIReleasePrimitiveArrayCritical(CGF, ptr_env, Pair.first, Pair.second,
                                          CGF.Builder.getInt32(2));
-  for (auto it = ScalarInputsToRelease.begin();
-       it != ScalarInputsToRelease.end(); ++it)
-    EmitJNIReleaseByteArrayElements(CGF, it->first, it->second,
+  for (auto Pair : InputScalarsToRelease)
+    EmitJNIReleaseByteArrayElements(CGF, ptr_env, Pair.first, Pair.second,
                                     CGF.Builder.getInt32(2));
-  for (auto it = OutputsToRelease.begin(); it != OutputsToRelease.end(); ++it)
-    EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
-                                         CGF.Builder.getInt32(0));
-  for (auto it = InOutputsToRelease.begin(); it != InOutputsToRelease.end();
-       ++it)
-    EmitJNIReleasePrimitiveArrayCritical(CGF, it->first, it->second,
+  for (auto Pair : OutputArraysToRelease)
+    EmitJNIReleasePrimitiveArrayCritical(CGF, ptr_env, Pair.first, Pair.second,
                                          CGF.Builder.getInt32(0));
 
   llvm::errs() << "Building outputs\n";
 
-  int NbOutputs = info.OutVarDef.size() + info.InOutVarUse.size();
+  unsigned NbOutputs =
+      info.StrictlyOutputs.size() + info.BothInputsOutputs.size();
 
   // Returning the output
   llvm::Value *retValue = nullptr;
@@ -2085,7 +1942,7 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
     // Just return the ByteArray
     retValue = OutputsToReturn.front();
   } else if (NbOutputs > 1) {
-    retValue = EmitJNICreateNewTuple(CGF, OutputsToReturn);
+    retValue = EmitJNICreateNewTuple(CGF, ptr_env, OutputsToReturn);
   } else {
     llvm::errs() << "WARNING OmpCloud: There is not output variable\n";
   }

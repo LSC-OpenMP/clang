@@ -284,20 +284,14 @@ static void AddLinkerInputs(const ToolChain &TC, const InputInfoList &Inputs,
 }
 
 static void AddScalaCompilation(const ToolChain &TC, Compilation &C,
-                  const JobAction &JA,
-                  const Tool &T,
-                  const ArgList &Args) {
-  bool isSparkTarget = TC.getTriple().getEnvironment() == llvm::Triple::Spark;
-
-  // This is the compilation for Spark target
-  if ( !isSparkTarget )
-    return;
-
+                                const JobAction &JA, const Tool &T,
+                                const ArgList &Args) {
   std::error_code EC;
 
   llvm::raw_fd_ostream BUILD_SBT("build.sbt", EC, llvm::sys::fs::F_Text);
   if (EC) {
-    llvm::errs() << "Couldn't open build.sbt file for dumping.\nError:" << EC.message() << "\n";
+    llvm::errs() << "Couldn't open build.sbt file for dumping.\nError:"
+                 << EC.message() << "\n";
     exit(1);
   }
 
@@ -308,28 +302,32 @@ static void AddScalaCompilation(const ToolChain &TC, Compilation &C,
             << "scalaVersion := \"2.11.11\"\n"
             << "val sparkVersion = \"2.2.0\"\n"
             << "\n"
-            << "libraryDependencies += \"org.apache.spark\" %% \"spark-core\" % sparkVersion % \"provided\"\n"
-            << "libraryDependencies += \"org.apache.spark\" %% \"spark-sql\" % sparkVersion % \"provided\"\n"
+            << "libraryDependencies += \"org.apache.spark\" %% \"spark-core\" "
+               "% sparkVersion % \"provided\"\n"
+            << "libraryDependencies += \"org.apache.spark\" %% \"spark-sql\" % "
+               "sparkVersion % \"provided\"\n"
             << "\n"
-            << "libraryDependencies += \"org.llvm.openmp\" %% \"omptarget-spark\" % \"1.0.0-SNAPSHOT\"\n";
+            << "libraryDependencies += \"org.llvm.openmp\" %% "
+               "\"omptarget-spark\" % \"1.0.0-SNAPSHOT\"\n";
 
   llvm::SmallString<128> Path("project");
   llvm::sys::fs::create_directory(Path);
   llvm::sys::path::append(Path, "plugins.sbt");
   llvm::raw_fd_ostream PLUGINS_SBT(Path, EC, llvm::sys::fs::F_Text);
   if (EC) {
-    llvm::errs() << "Couldn't open plugins.sbt file for dumping.\nError:" << EC.message() << "\n";
+    llvm::errs() << "Couldn't open plugins.sbt file for dumping.\nError:"
+                 << EC.message() << "\n";
     exit(1);
   }
 
-  PLUGINS_SBT << "addSbtPlugin(\"com.eed3si9n\" % \"sbt-assembly\" % \"0.14.5\")";
+  PLUGINS_SBT
+      << "addSbtPlugin(\"com.eed3si9n\" % \"sbt-assembly\" % \"0.14.5\")";
 
   const char *Exec = Args.MakeArgString(TC.GetProgramPath("sbt"));
   ArgStringList ExtractArgs;
   ExtractArgs.push_back("assembly");
   InputInfo II;
   C.addCommand(llvm::make_unique<Command>(JA, T, Exec, ExtractArgs, II));
-
 }
 
 /// Add OpenMP linker script arguments at the end of the argument list so that
@@ -10405,6 +10403,8 @@ void gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
         }
         if (JA.isHostOffloading(Action::OFK_OpenMP))
           CmdArgs.push_back("-lomptarget");
+        else if(ToolChain.getTriple().isSparkEnvironment())
+          CmdArgs.push_back("-lomptarget-jni");
       }
 
       AddRunTimeLibs(ToolChain, D, CmdArgs, Args);
@@ -10456,7 +10456,8 @@ void gnutools::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
 
   // Add SBT call if required.
-  AddScalaCompilation(getToolChain(), C, JA, *this, Args);
+  if (getToolChain().getTriple().isSparkEnvironment())
+    AddScalaCompilation(getToolChain(), C, JA, *this, Args);
 }
 
 // NaCl ARM assembly (inline or standalone) can be written with a set of macros
@@ -12499,3 +12500,5 @@ void NVPTX::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   const char *Exec = Args.MakeArgString(TC.GetProgramPath("fatbinary"));
   C.addCommand(llvm::make_unique<Command>(JA, *this, Exec, CmdArgs, Inputs));
 }
+
+
