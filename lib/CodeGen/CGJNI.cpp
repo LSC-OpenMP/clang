@@ -89,6 +89,9 @@ enum OpenMPRTLFunctionJNI {
   /// jboolean
   /// *isCopy)
   OMPRTL_JNI__GetByteArrayElements,
+  /// \brief Call to void SetByteArrayRegion(JNIEnv *env, ArrayType array,
+  /// jsize start, jsize len, const jbyte *buf);
+  OMPRTL_JNI__SetByteArrayRegion,
   /// \brief Call to void ReleasePrimitiveArrayCritical(JNIEnv *env, jarray
   /// array, void
   /// *carray, jint mode)
@@ -109,11 +112,12 @@ enum OpenMPRTLFunctionJNI {
 llvm::Constant *
 CGOpenMPRuntimeSpark::createJNIRuntimeFunction(unsigned Function) {
   llvm::Constant *RTLFn = nullptr;
+  ASTContext &C = CGM.getContext();
 
   switch (static_cast<OpenMPRTLFunctionJNI>(Function)) {
   case OMPRTL_JNI__NewByteArray: {
     // Build jbyteArray __jni_NewByteArray(JNIEnv *env, jsize len);
-    llvm::Type *TypeParams[] = {JNIEnvTy, jsizeTy};
+    llvm::Type *TypeParams[] = {JNIEnvTy, CGM.getTypes().ConvertType(C.IntTy)};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(jbyteArrayTy, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_NewByteArray");
@@ -137,6 +141,17 @@ CGOpenMPRuntimeSpark::createJNIRuntimeFunction(unsigned Function) {
     llvm::FunctionType *FnTy = llvm::FunctionType::get(
         jbyteTy->getPointerTo(), TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_GetByteArrayElements");
+    break;
+  }
+  case OMPRTL_JNI__SetByteArrayRegion: {
+    // Build  void __jni_SetByteArrayRegion(JNIEnv *env, jbyteArray array,
+    // jsize start, jsize len, const jbyte *buf);
+    llvm::Type *TypeParams[] = {
+        JNIEnvTy, jbyteArrayTy, CGM.getTypes().ConvertType(C.IntTy),
+        CGM.getTypes().ConvertType(C.IntTy), jbyteTy->getPointerTo()};
+    llvm::FunctionType *FnTy =
+        llvm::FunctionType::get(CGM.VoidTy, TypeParams, /*isVarArg*/ false);
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__jni_SetByteArrayRegion");
     break;
   }
   case OMPRTL_JNI__ReleasePrimitiveArrayCritical: {
@@ -176,8 +191,7 @@ llvm::Value *CGOpenMPRuntimeSpark::EmitJNINewByteArray(CodeGenFunction &CGF,
                                                        llvm::Value *Env,
                                                        llvm::Value *Size) {
   // Build call __jni_NewByteArray(jsize len)
-  llvm::Value *Args[] = {
-      Env, CGF.Builder.CreateIntCast(Size, CGF.Int32Ty, /*isSigned*/ true)};
+  llvm::Value *Args[] = {Env, Size};
   return CGF.EmitRuntimeCall(createJNIRuntimeFunction(OMPRTL_JNI__NewByteArray),
                              Args);
 }
@@ -200,6 +214,16 @@ llvm::Value *CGOpenMPRuntimeSpark::EmitJNIGetByteArrayElements(
   llvm::Value *Args[] = {Env, Array, IsCopy};
   return CGF.EmitRuntimeCall(
       createJNIRuntimeFunction(OMPRTL_JNI__GetByteArrayElements), Args);
+}
+
+llvm::Value *CGOpenMPRuntimeSpark::EmitJNISetByteArrayRegion(
+    CodeGenFunction &CGF, llvm::Value *Env, llvm::Value *Array,
+    llvm::Value *Start, llvm::Value *Len, llvm::Value *Buf) {
+  // Build call __jni_SetByteArrayRegion(JNIEnv *env, jbyteArray array,
+  //  jsize start, jsize len, const jbyte *buf)
+  llvm::Value *Args[] = {Env, Array, Start, Len, Buf};
+  return CGF.EmitRuntimeCall(
+      createJNIRuntimeFunction(OMPRTL_JNI__SetByteArrayRegion), Args);
 }
 
 llvm::Value *CGOpenMPRuntimeSpark::EmitJNIReleasePrimitiveArrayCritical(

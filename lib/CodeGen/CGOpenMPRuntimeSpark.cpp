@@ -1,4 +1,4 @@
-//===---- CGOpenMPRuntimeNVPTX.cpp - Interface to OpenMP NVPTX Runtimes ---===//
+﻿//===---- CGOpenMPRuntimeNVPTX.cpp - Interface to OpenMP NVPTX Runtimes ---===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -542,25 +542,22 @@ void CGOpenMPRuntimeSpark::EmitSparkNativeKernel(
     SPARK_FILE << ")\n";
     SPARK_FILE << "  }\n\n";
 
-    //    llvm::errs() << "Reduce Native\n";
+    llvm::errs() << "Reduce Native\n";
 
-    //    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end();
-    //    ++it) {
-    //      SPARK_FILE << "  @native def reduceMethod" << (*it)->getName()
-    //                 << info.Identifier
-    //                 << "(n0 : Array[Byte], n1 : Array[Byte]) :
-    //                 Array[Byte]\n\n";
-    //    }
-    //    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end();
-    //    ++it) {
-    //      SPARK_FILE << "  def reduce" << (*it)->getName() << info.Identifier
-    //                 << "(n0 : Array[Byte], n1 : Array[Byte]) : Array[Byte]";
-    //      SPARK_FILE << " = {\n";
-    //      SPARK_FILE << "    NativeKernels.loadOnce()\n";
-    //      SPARK_FILE << "    return reduceMethod" << (*it)->getName()
-    //                 << info.Identifier << "(n0, n1)\n";
-    //      SPARK_FILE << "  }\n\n";
-    //    }
+    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end(); ++it) {
+      SPARK_FILE << "  @native def reduceMethod" << (*it)->getName()
+                 << info.Identifier
+                 << "(n0 : Array[Byte], n1 : Array[Byte]) : Array[Byte]\n\n ";
+    }
+    for (auto it = info.ReducedVar.begin(); it != info.ReducedVar.end(); ++it) {
+      SPARK_FILE << "  def reduce" << (*it)->getName() << info.Identifier
+                 << "(n0 : Array[Byte], n1 : Array[Byte]) : Array[Byte]";
+      SPARK_FILE << " = {\n";
+      SPARK_FILE << "    NativeKernels.loadOnce()\n";
+      SPARK_FILE << "    return reduceMethod" << (*it)->getName()
+                 << info.Identifier << "(n0, n1)\n";
+      SPARK_FILE << "  }\n\n";
+    }
   }
   SPARK_FILE << "}\n\n";
 
@@ -871,20 +868,16 @@ void CGOpenMPRuntimeSpark::EmitSparkMapping(llvm::raw_fd_ostream &SPARK_FILE,
 
     if (NbOutputs == 1) {
       // 1 output -> return the result directly
-    } else if (NbOutputs == 2 || NbOutputs == 3) {
+    } else {
       // 2 or 3 outputs -> extract each variable from the Tuple2 or Tuple3
       SPARK_FILE << ".map{ x => (x._1, x._2._" << i + 1 << ") }";
-    } else {
-      // More than 3 outputs -> extract each variable from the Collection
-      SPARK_FILE << ".map{ x => (x._1, x._2(" << i << ")) }";
     }
-    //    if (std::find(info.ReducedVar.begin(), info.ReducedVar.end(), VD) !=
-    //        info.ReducedVar.end())
-    //      SPARK_FILE << ".map{ x => x._2 }.reduce{(x, y) => new "
-    //                    "OmpKernel().reduce"
-    //                 << VD->getName() << MappingId << "(x, y)}";
-    //    else
-    if (Range)
+    if (std::find(info.ReducedVar.begin(), info.ReducedVar.end(), VD) !=
+        info.ReducedVar.end())
+      SPARK_FILE << ".map{ x => x._2 }.reduce{(x, y) => new "
+                    "OmpKernel().reduce"
+                 << VD->getName() << MappingId << "(x, y)}";
+    else if (Range)
       SPARK_FILE << ".collect()";
     else
       SPARK_FILE << ".map{ x => x._2 "
@@ -1335,251 +1328,167 @@ void CGOpenMPRuntimeSpark::GenerateReductionKernel(
   llvm::errs() << "GenerateReductionKernel\n";
   bool verbose = VERBOSE;
 
-  // Create the mapping function
-  llvm::Module *mod = &(CGM.getModule());
+  auto &Ctx = CGM.getContext();
 
   // FIXME: should be the right function
   auto &info = SparkMappingFunctions.back();
 
-  // Get JNI type
-  llvm::StructType *StructTy_JNINativeInterface =
-      mod->getTypeByName("struct.JNINativeInterface_");
-  llvm::PointerType *PointerTy_JNINativeInterface =
-      llvm::PointerType::get(StructTy_JNINativeInterface, 0);
-  llvm::PointerType *PointerTy_1 =
-      llvm::PointerType::get(PointerTy_JNINativeInterface, 0);
+  auto ItRedOp = C.reduction_ops().begin();
+  auto ItLHS = C.lhs_exprs().begin();
+  auto ItRHS = C.rhs_exprs().begin();
 
-  llvm::StructType *StructTy_jobject = mod->getTypeByName("struct._jobject");
-  llvm::PointerType *PointerTy_jobject =
-      llvm::PointerType::get(StructTy_jobject, 0);
+  for (auto I = C.varlist_begin(), E = C.varlist_end(); I != E;
+       ++I, ++ItRedOp, ++ItLHS, ++ItRHS) {
 
-  for (OMPReductionClause::varlist_const_iterator I = C.varlist_begin(),
-                                                  E = C.varlist_end();
-       I != E; ++I) {
+    (*I)->dump();
 
     const VarDecl *VD = cast<VarDecl>(cast<DeclRefExpr>(*I)->getDecl());
 
+    info.ReducedVar.push_back(VD);
+
+    // Create the mapping function
+
     // Initialize arguments
-    std::vector<llvm::Type *> FuncTy_args;
+    FunctionArgList ArgList;
 
-    // Add compulsary arguments
-    FuncTy_args.push_back(PointerTy_1);
-    FuncTy_args.push_back(PointerTy_jobject);
+    // Add compulsary JNI arguments
+    ArgList.push_back(ImplicitParamDecl::Create(
+        Ctx, /*DC=*/nullptr, S.getLocStart(), &Ctx.Idents.get("env"), JNIEnvQTy,
+        ImplicitParamDecl::Other));
+    ArgList.push_back(ImplicitParamDecl::Create(
+        Ctx, /*DC=*/nullptr, S.getLocStart(), &Ctx.Idents.get("thiz"),
+        jobjectQTy, ImplicitParamDecl::Other));
 
-    FuncTy_args.push_back(PointerTy_jobject);
-    FuncTy_args.push_back(PointerTy_jobject);
+    // Arg1
+    ArgList.push_back(
+        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
+    // Arg2
+    ArgList.push_back(
+        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
 
-    llvm::FunctionType *FnTy = llvm::FunctionType::get(
-        /*Result=*/PointerTy_jobject,
-        /*Params=*/FuncTy_args,
-        /*isVarArg=*/false);
+    auto &FnInfo =
+        CGM.getTypes().arrangeBuiltinFunctionDeclaration(jobjectQTy, ArgList);
+    auto *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
 
     std::string RedFnName = "Java_org_llvm_openmp_OmpKernel_reduceMethod" +
                             VD->getNameAsString() +
                             std::to_string(info.Identifier);
 
+    auto *RedFn = llvm::Function::Create(
+        FnTy, llvm::GlobalValue::ExternalLinkage, RedFnName, &CGM.getModule());
+    CGM.SetInternalFunctionAttributes(/*D=*/nullptr, RedFn, FnInfo);
+    RedFn->setLinkage(llvm::GlobalValue::WeakAnyLinkage);
+
+    // Initialize a new CodeGenFunction used to generate the mapping
+    CodeGenFunction CGF(CGM);
+    CGF.disableDebugInfo();
+    CGF.StartFunction(GlobalDecl(), jobjectQTy, RedFn, FnInfo, ArgList);
+
     if (verbose)
       llvm::errs() << RedFnName << "\n";
 
-    llvm::Function *RedFn = llvm::Function::Create(
-        FnTy, llvm::GlobalValue::ExternalLinkage, RedFnName, mod);
-
-    // Initialize a new CodeGenFunction used to generate the reduction
-    CodeGenFunction CGF(CGM, true);
-
     auto &Bld = CGF.Builder;
-
-    assert(!CGF.CurFn &&
-           "Do not use a CodeGenFunction object for more than one function");
-
-    CGF.CurFn = RedFn;
-    CGF.EnsureInsertPoint();
-
-    // Generate useful type and constant
-    llvm::PointerType *PointerTy_Int8 =
-        llvm::PointerType::get(Bld.getInt8Ty(), 0);
-    llvm::PointerType *PointerTy_Int32 =
-        llvm::PointerType::get(Bld.getInt32Ty(), 0);
-
-    llvm::ConstantInt *const_int32_0 = llvm::ConstantInt::get(
-        CGM.getLLVMContext(), llvm::APInt(32, llvm::StringRef("0"), 10));
-
-    llvm::ConstantPointerNull *const_ptr_null =
-        llvm::ConstantPointerNull::get(PointerTy_Int8);
 
     // Find the bit size
     QualType VarType = VD->getType();
-    int32_t SizeInByte = CGM.getContext().getTypeSize(VarType) / 8;
-    llvm::ConstantInt *const_int32_typeSizeIntByte =
-        llvm::ConstantInt::get(Bld.getInt32Ty(), SizeInByte);
+    uint32_t SizeInByte = CGM.getContext().getTypeSize(VarType) / 8;
 
-    // Allocate and load compulsry JNI arguments
-    llvm::Function::arg_iterator args = RedFn->arg_begin();
-    args->setName("env");
-    llvm::AllocaInst *alloca_env = Bld.CreateAlloca(PointerTy_1);
-    Bld.CreateAlignedStore(&*args, alloca_env, CGM.getPointerAlign());
-    args++;
-    args->setName("obj");
-    llvm::AllocaInst *alloca_obj = Bld.CreateAlloca(PointerTy_jobject);
-    Bld.CreateAlignedStore(&*args, alloca_obj, CGM.getPointerAlign());
-    args++;
+    llvm::Type *TyObject_arg = CGM.getTypes().ConvertType(VarType);
 
-    // FIXME: check alignment
-    llvm::LoadInst *ptr_env =
-        Bld.CreateAlignedLoad(alloca_env, CGM.getPointerAlign());
-    llvm::LoadInst *ptr_ptr_env =
-        Bld.CreateAlignedLoad(ptr_env, CGM.getPointerAlign());
+    // Allocate and load compulsary JNI arguments
+    auto ArgsIt = ArgList.begin();
+    auto EnvAddr =
+        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                              (*ArgsIt)->getType()->getAs<PointerType>());
+    ++ArgsIt;
+    auto ObjAddr =
+        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                              (*ArgsIt)->getType()->getAs<PointerType>());
+    ++ArgsIt;
 
-    llvm::Value *ptr_gep_getelement =
-        Bld.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 184);
-    llvm::LoadInst *ptr_fn_getelement =
-        Bld.CreateAlignedLoad(ptr_gep_getelement, CGM.getPointerAlign());
+    auto *ptr_env = EnvAddr.getPointer();
 
-    llvm::Value *ptr_gep_releaseelement =
-        Bld.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 192);
-    llvm::LoadInst *ptr_fn_releaseelement =
-        Bld.CreateAlignedLoad(ptr_gep_releaseelement, CGM.getPointerAlign());
-
-    llvm::Value *ptr_gep_newbytearray =
-        Bld.CreateConstGEP2_32(nullptr, ptr_ptr_env, 0, 176);
-    llvm::LoadInst *ptr_fn_newbytearray =
-        Bld.CreateAlignedLoad(ptr_gep_newbytearray, CGM.getPointerAlign());
+    llvm::errs() << "COMPULSARY\n";
 
     // Allocate, load and cast the first operand
-    llvm::AllocaInst *alloca_arg1 = Bld.CreateAlloca(PointerTy_jobject);
-    Bld.CreateAlignedStore(&*args, alloca_arg1, CGM.getPointerAlign());
+    Address JObjectAddr1 =
+        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                              (*ArgsIt)->getType()->getAs<PointerType>());
 
-    llvm::LoadInst *ptr_arg1 =
-        Bld.CreateAlignedLoad(alloca_arg1, CGM.getPointerAlign());
-    std::vector<llvm::Value *> ptr_275_params;
-    ptr_275_params.push_back(ptr_env);
-    ptr_275_params.push_back(ptr_arg1);
-    ptr_275_params.push_back(const_ptr_null);
-    llvm::CallInst *ptr_275 = Bld.CreateCall(ptr_fn_getelement, ptr_275_params);
+    llvm::errs() << "Op1 Loaded\n";
 
-    llvm::Value *ptr_265 = Bld.CreateBitCast(ptr_275, PointerTy_Int32);
-    llvm::Value *ptr_265_3 =
-        Bld.CreateAlignedLoad(ptr_265, CGM.getPointerAlign());
-    llvm::Value *ptr_265_3_cast =
-        Bld.CreateBitCast(ptr_265_3, Bld.getInt32Ty());
-    args++;
+    llvm::Value *JObjectPtr1 = JObjectAddr1.getPointer();
+
+    llvm::errs() << "Op1 Loaded\n";
+
+    llvm::Value *ByteArrayPtr1 = EmitJNIGetByteArrayElements(
+        CGF, ptr_env, JObjectPtr1,
+        llvm::ConstantPointerNull::get(jbooleanTy->getPointerTo()));
+
+    llvm::errs() << "Op1 EmitJNIGetByteArrayElements\n";
+
+    llvm::Value *OperandPtr1 =
+        Bld.CreateBitCast(ByteArrayPtr1, TyObject_arg->getPointerTo());
+
+    ++ArgsIt;
+
+    llvm::errs() << "Op1\n";
 
     // Allocate, load and cast the second operand
-    llvm::AllocaInst *alloca_arg2 = Bld.CreateAlloca(PointerTy_jobject);
-    Bld.CreateAlignedStore(&*args, alloca_arg2, CGM.getPointerAlign());
+    Address JObjectAddr2 =
+        CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
+                              (*ArgsIt)->getType()->getAs<PointerType>());
+    llvm::Value *JObjectPtr2 = JObjectAddr2.getPointer();
 
-    llvm::LoadInst *ptr_arg2 =
-        Bld.CreateAlignedLoad(alloca_arg2, CGM.getPointerAlign());
-    std::vector<llvm::Value *> ptr_275_1_params;
-    ptr_275_1_params.push_back(ptr_env);
-    ptr_275_1_params.push_back(ptr_arg2);
-    ptr_275_1_params.push_back(const_ptr_null);
-    llvm::CallInst *ptr_275_1 =
-        Bld.CreateCall(ptr_fn_getelement, ptr_275_1_params);
+    llvm::Value *ByteArrayPtr2 = EmitJNIGetByteArrayElements(
+        CGF, ptr_env, JObjectPtr2,
+        llvm::ConstantPointerNull::get(jbooleanTy->getPointerTo()));
 
-    llvm::Value *ptr_265_1 = Bld.CreateBitCast(ptr_275_1, PointerTy_Int32);
-    llvm::Value *ptr_265_2 =
-        Bld.CreateAlignedLoad(ptr_265_1, CGM.getPointerAlign());
-    llvm::Value *ptr_265_2_cast =
-        Bld.CreateBitCast(ptr_265_2, Bld.getInt32Ty());
+    llvm::Value *OperandPtr2 =
+        Bld.CreateBitCast(ByteArrayPtr2, TyObject_arg->getPointerTo());
 
-    // Compute the reduction
-    llvm::Value *res = nullptr;
+    llvm::errs() << "AFTER LOAD ARG\n";
 
-    /* FIXME: generate operation
-    switch (C.getOperator()) {
-    case OMPC_REDUCTION_or:
-    case OMPC_REDUCTION_bitor: {
-      res = Bld.CreateOr(ptr_265_3_cast, ptr_265_2_cast);
-      break;
-    }
-    case OMPC_REDUCTION_bitxor: {
-      res = Bld.CreateXor(ptr_265_3_cast, ptr_265_2_cast);
-      break;
-    }
-    case OMPC_REDUCTION_sub: {
-      res = Bld.CreateSub(ptr_265_3_cast, ptr_265_2_cast);
-      break;
-    }
-    case OMPC_REDUCTION_add: {
-      res = Bld.CreateAdd(ptr_265_3_cast, ptr_265_2_cast, "", false,
-                                  true);
-      break;
-    }
-    case OMPC_REDUCTION_and:
-    case OMPC_REDUCTION_bitand: {
-      res = Bld.CreateAnd(ptr_265_3_cast, ptr_265_2_cast);
-      break;
-    }
-    case OMPC_REDUCTION_mult: {
-      res = Bld.CreateMul(ptr_265_3_cast, ptr_265_2_cast);
-      break;
-    }
-    case OMPC_REDUCTION_min: {
-      break;
-    }
-    case OMPC_REDUCTION_max: {
-      // TODO: What about min/max op ?
-      break;
-    }
-    case OMPC_REDUCTION_custom:
-      llvm_unreachable("Custom initialization cannot be NULLed.");
-    case OMPC_REDUCTION_unknown:
-    case NUM_OPENMP_REDUCTION_OPERATORS:
-      llvm_unreachable("Unkonwn operator kind.");
-    }
-    */
+    auto DeclRHS = dyn_cast<DeclRefExpr>(*ItRHS)->getDecl();
+    CGF.EmitDecl(*DeclRHS);
+    auto AddrRHS = CGF.GetAddrOfLocalVar(dyn_cast<VarDecl>(DeclRHS));
 
-    // Allocate and store the result
-    // FIXME: what about other type
-    llvm::AllocaInst *alloca_res = Bld.CreateAlloca(Bld.getInt32Ty());
-    Bld.CreateAlignedStore(res, alloca_res, CGM.getIntAlign());
+    auto DeclLHS = dyn_cast<DeclRefExpr>(*ItLHS)->getDecl();
+    CGF.EmitDecl(*DeclLHS);
+    auto AddrLHS = CGF.GetAddrOfLocalVar(dyn_cast<VarDecl>(DeclLHS));
 
-    // Protect arg 1
+    Bld.CreateStore(Bld.CreateAlignedLoad(OperandPtr1, CGM.getPointerAlign()),
+                    AddrRHS);
+    Bld.CreateStore(Bld.CreateAlignedLoad(OperandPtr2, CGM.getPointerAlign()),
+                    AddrLHS);
 
-    {
-      std::vector<llvm::Value *> void_272_params;
-      void_272_params.push_back(ptr_env);
-      void_272_params.push_back(ptr_arg1);
-      void_272_params.push_back(ptr_275);
-      void_272_params.push_back(const_int32_0);
-      Bld.CreateCall(ptr_fn_releaseelement, void_272_params);
-    }
+    CGF.EmitStmt(*ItRedOp);
 
-    // Protect arg 2
+    llvm::Value *Buf =
+        Bld.CreateBitCast(AddrLHS.getPointer(), jbyteTy->getPointerTo());
 
-    {
-      std::vector<llvm::Value *> void_272_params;
-      void_272_params.push_back(ptr_env);
-      void_272_params.push_back(ptr_arg2);
-      void_272_params.push_back(ptr_275_1);
-      void_272_params.push_back(const_int32_0);
-      Bld.CreateCall(ptr_fn_releaseelement, void_272_params);
-    }
+    llvm::Value *Res =
+        EmitJNINewByteArray(CGF, ptr_env, CGF.Builder.getInt32(SizeInByte));
 
-    // Cast back the result to bit array
-    std::vector<llvm::Value *> ptr_277_params;
-    ptr_277_params.push_back(ptr_env);
-    ptr_277_params.push_back(const_int32_typeSizeIntByte);
-    llvm::CallInst *ptr_277 =
-        Bld.CreateCall(ptr_fn_newbytearray, ptr_277_params);
+    EmitJNISetByteArrayRegion(CGF, ptr_env, Res, CGF.Builder.getInt32(0),
+                              CGF.Builder.getInt32(SizeInByte), Buf);
 
-    llvm::Value *ptr_279 =
-        Bld.CreateConstInBoundsGEP2_32(nullptr, ptr_ptr_env, 0, 208);
-    llvm::LoadInst *ptr_280 =
-        Bld.CreateAlignedLoad(ptr_279, CGM.getPointerAlign());
-    llvm::Value *ptr_res_cast =
-        Bld.CreateBitCast(alloca_res, PointerTy_Int8, "");
-    std::vector<llvm::Value *> void_281_params;
-    void_281_params.push_back(ptr_env);
-    void_281_params.push_back(ptr_277);
-    void_281_params.push_back(const_int32_0);
-    void_281_params.push_back(const_int32_typeSizeIntByte);
-    void_281_params.push_back(ptr_res_cast);
-    Bld.CreateCall(ptr_280, void_281_params);
+    // Release args
+    EmitJNIReleaseByteArrayElements(CGF, ptr_env, JObjectPtr1, ByteArrayPtr1,
+                                    CGF.Builder.getInt32(2));
+    EmitJNIReleaseByteArrayElements(CGF, ptr_env, JObjectPtr2, ByteArrayPtr2,
+                                    CGF.Builder.getInt32(2));
 
-    Bld.CreateRet(ptr_277);
+    llvm::errs() << "Storing result\n";
+    Bld.CreateStore(Res, CGF.ReturnValue);
+
+    llvm::errs() << "AFTER STORE IN RES\n";
+
+    llvm::errs() << "Finishing function\n";
+    CGF.FinishFunction();
   }
+
+  llvm::errs() << "END of Reduction function CodeGen\n";
 }
 
 llvm::Function *
@@ -1595,17 +1504,17 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   const OMPParallelForDirective &ForDirective =
       cast<OMPParallelForDirective>(S);
 
-  //  for (ArrayRef<OMPClause *>::const_iterator I = S.clauses().begin(),
-  //                                             E = S.clauses().end();
-  //       I != E; ++I)
-  //    if (*I && (*I)->getClauseKind() == OMPC_reduction)
-  //      GenerateReductionKernel(cast<OMPReductionClause>(*(*I)), S);
-
   llvm::errs() << "NUMBER OF COUNTERS == " << ForDirective.counters().size()
                << "\n";
 
   SparkMappingFunctions.push_back(OMPSparkMappingInfo(&ForDirective));
   OMPSparkMappingInfo &info = SparkMappingFunctions.back();
+
+  for (ArrayRef<OMPClause *>::const_iterator I = S.clauses().begin(),
+                                             E = S.clauses().end();
+       I != E; ++I)
+    if (*I && (*I)->getClauseKind() == OMPC_reduction)
+      GenerateReductionKernel(cast<OMPReductionClause>(*(*I)), S);
 
   llvm::errs() << "--- MappingFunction ID = " << info.Identifier << "\n";
 
@@ -1662,39 +1571,41 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
 
   // For->dump();
 
-  // Create the mapping function
-
-  // Initialize a new CodeGenFunction used to generate the mapping
-
   // Detect input/output expression from the loop body
   FindKernelArguments Finder(CGM, *this, info);
   Finder.Explore(LoopStmt);
 
+  // Create the mapping function
+
   // Initialize arguments
   FunctionArgList ArgList;
 
-  // Add compulsary arguments
-  // ImplicitParamDecl JNIEnvParam(Ctx, /*DC=*/nullptr, S.getLocStart(),
-  //                              &Ctx.Idents.get("JNIEnv"), JNIEnvQTy,
-  //                              ImplicitParamDecl::Other);
-  ArgList.push_back(
-      ImplicitParamDecl::Create(Ctx, JNIEnvQTy, ImplicitParamDecl::Other));
-  ArgList.push_back(
-      ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
+  // Add compulsary JNI arguments
+  ArgList.push_back(ImplicitParamDecl::Create(
+      Ctx, /*DC=*/nullptr, S.getLocStart(), &Ctx.Idents.get("env"), JNIEnvQTy,
+      ImplicitParamDecl::Other));
+  ArgList.push_back(ImplicitParamDecl::Create(
+      Ctx, /*DC=*/nullptr, S.getLocStart(), &Ctx.Idents.get("thiz"), jobjectQTy,
+      ImplicitParamDecl::Other));
 
   for (auto it = info.CounterInfo.begin(); it != info.CounterInfo.end(); ++it) {
-    ArgList.push_back(
-        ImplicitParamDecl::Create(Ctx, jlongQTy, ImplicitParamDecl::Other));
-    ArgList.push_back(
-        ImplicitParamDecl::Create(Ctx, jlongQTy, ImplicitParamDecl::Other));
+    ArgList.push_back(ImplicitParamDecl::Create(
+        Ctx, /*DC=*/nullptr, S.getLocStart(),
+        &Ctx.Idents.get("barrayCnt_" + it->getFirst()->getNameAsString()),
+        jlongQTy, ImplicitParamDecl::Other));
+    ArgList.push_back(ImplicitParamDecl::Create(
+        Ctx, /*DC=*/nullptr, S.getLocStart(),
+        &Ctx.Idents.get("barrayCntBnd_" + it->getFirst()->getNameAsString()),
+        jlongQTy, ImplicitParamDecl::Other));
   }
 
   for (auto VD : info.AllArgs) {
-    ArgList.push_back(
-        ImplicitParamDecl::Create(Ctx, jobjectQTy, ImplicitParamDecl::Other));
+    ArgList.push_back(ImplicitParamDecl::Create(
+        Ctx, /*DC=*/nullptr, S.getLocStart(),
+        &Ctx.Idents.get("barray_" + VD->getNameAsString()), jobjectQTy,
+        ImplicitParamDecl::Other));
   }
 
-  // FIXME: maybe output should be ptr to jobjectQTy
   auto &FnInfo =
       CGM.getTypes().arrangeBuiltinFunctionDeclaration(jobjectQTy, ArgList);
   auto *FnTy = CGM.getTypes().GetFunctionType(FnInfo);
@@ -1703,19 +1614,15 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
   auto *Fn = llvm::Function::Create(FnTy, llvm::GlobalValue::ExternalLinkage,
                                     FnName, &CGM.getModule());
   CGM.SetInternalFunctionAttributes(/*D=*/nullptr, Fn, FnInfo);
+
+  // Initialize a new CodeGenFunction used to generate the mapping
   CodeGenFunction CGF(CGM);
   CGF.disableDebugInfo();
   CGF.StartFunction(GlobalDecl(), jobjectQTy, Fn, FnInfo, ArgList);
 
   auto &Bld = CGF.Builder;
 
-  // Generate useful type and constant"
-  llvm::PointerType *PointerTy_Int8 =
-      llvm::PointerType::get(Bld.getInt8Ty(), 0);
-  llvm::ConstantPointerNull *const_ptr_null =
-      llvm::ConstantPointerNull::get(PointerTy_Int8);
-
-  // Create the variables to save the slot, stack, frame and active threads.
+  // Allocate and load compulsary JNI arguments
   auto ArgsIt = ArgList.begin();
   auto EnvAddr =
       CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),
@@ -1790,8 +1697,9 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
     llvm::Value *ValPtr;
 
     if (!varType->isAnyPointerType()) {
-      llvm::Value *ptr_load_arg =
-          EmitJNIGetByteArrayElements(CGF, ptr_env, JObjectPtr, const_ptr_null);
+      llvm::Value *ptr_load_arg = EmitJNIGetByteArrayElements(
+          CGF, ptr_env, JObjectPtr,
+          llvm::ConstantPointerNull::get(jbooleanTy->getPointerTo()));
 
       InputScalarsToRelease.push_back(std::make_pair(JObjectPtr, ptr_load_arg));
       ValPtr = Bld.CreateBitCast(ptr_load_arg, TyObject_arg->getPointerTo());
@@ -1824,7 +1732,8 @@ CGOpenMPRuntimeSpark::GenerateMappingKernel(const OMPExecutableDirective &S) {
 
   llvm::errs() << "GetJObjectFromInputOutputAndOutput\n";
 
-  // Allocate, load and cast input/output and output variables (i.e. the arguments)
+  // Allocate, load and cast input/output and output variables (i.e. the
+  // arguments)
   for (auto VD : info.AllOutputs) {
     Address JObjectAddr =
         CGF.EmitLoadOfPointer(CGF.GetAddrOfLocalVar(*ArgsIt),

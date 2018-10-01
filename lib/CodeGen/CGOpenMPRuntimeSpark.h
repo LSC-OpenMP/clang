@@ -197,6 +197,9 @@ public:
   llvm::Value *EmitJNIGetByteArrayElements(CodeGenFunction &CGF,
                                            llvm::Value *Env, llvm::Value *Array,
                                            llvm::Value *IsCopy);
+  llvm::Value *EmitJNISetByteArrayRegion(CodeGenFunction &CGF, llvm::Value *Env,
+                                         llvm::Value *Array, llvm::Value *Start,
+                                         llvm::Value *Len, llvm::Value *Buf);
   llvm::Value *EmitJNIReleasePrimitiveArrayCritical(CodeGenFunction &CGF,
                                                     llvm::Value *Env,
                                                     llvm::Value *Array,
