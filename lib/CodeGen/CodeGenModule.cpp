@@ -21,6 +21,7 @@
 #include "CGOpenCLRuntime.h"
 #include "CGOpenMPRuntime.h"
 #include "CGOpenMPRuntimeNVPTX.h"
+#include "CGOpenMPRuntimeSpark.h"
 #include "CodeGenFunction.h"
 #include "CodeGenPGO.h"
 #include "CodeGenTBAA.h"
@@ -268,8 +269,14 @@ void CodeGenModule::createOpenMPRuntime() {
     OpenMPRuntime.reset(new CGOpenMPRuntimeNVPTX(*this));
     break;
   default:
-    OpenMPRuntime.reset(new CGOpenMPRuntime(*this));
-    break;
+    switch (getTriple().getEnvironment()) {
+    case llvm::Triple::Spark:
+      OpenMPRuntime.reset(new CGOpenMPRuntimeSpark(*this));
+      break;
+    default:
+      OpenMPRuntime.reset(new CGOpenMPRuntime(*this));
+      break;
+    }
   }
 }
 

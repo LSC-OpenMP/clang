@@ -17,6 +17,7 @@
 #include "CGDebugInfo.h"
 #include "CGObjCRuntime.h"
 #include "CGOpenMPRuntime.h"
+#include "CGOpenMPRuntimeSpark.h"
 #include "CGRecordLayout.h"
 #include "CodeGenFunction.h"
 #include "CodeGenModule.h"
@@ -2214,6 +2215,16 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
   QualType T = E->getType();
 
   if (const auto *VD = dyn_cast<VarDecl>(ND)) {
+    if (CGM.getLangOpts().OpenMPIsDevice && CGM.getTriple().isSparkEnvironment()) {
+      auto& Runtime = cast<CGOpenMPRuntimeSpark>(CGM.getOpenMPRuntime());
+      if(Runtime.ShouldAccessJNIArgs)
+        if (llvm::Value *Val = Runtime.getOpenMPKernelArgVar(VD)) {
+          llvm::errs() << "Access mapped variable " << VD->getName() << "\n";
+          Val->dump();
+          return MakeAddrLValue(Val, T, getContext().getDeclAlign(VD));
+        }
+    }
+
     // Global Named registers access via intrinsics only
     if (VD->getStorageClass() == SC_Register &&
         VD->hasAttr<AsmLabelAttr>() && !VD->isLocalVarDecl())
@@ -2320,7 +2331,6 @@ LValue CodeGenFunction::EmitDeclRefLValue(const DeclRefExpr *E) {
     } else {
       llvm_unreachable("DeclRefExpr for Decl not entered in LocalDeclMap?");
     }
-
 
     // Check for OpenMP threadprivate variables.
     if (getLangOpts().OpenMP && VD->hasAttr<OMPThreadPrivateDeclAttr>()) {

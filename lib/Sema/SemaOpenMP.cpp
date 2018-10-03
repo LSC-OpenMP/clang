@@ -4392,6 +4392,13 @@ static bool CheckOpenMPIterationSpace(
   ResultIterSpace.IncSrcRange = ISC.GetIncrementSrcRange();
   ResultIterSpace.Subtract = ISC.ShouldSubtractStep();
 
+  llvm::errs() << "CounterStep =\n";
+  ResultIterSpace.CounterStep->dump();
+  llvm::errs() << "CounterInit =\n";
+  ResultIterSpace.CounterInit->dump();
+  llvm::errs() << "NumIterations =\n";
+  ResultIterSpace.NumIterations->dump();
+
   HasErrors |= (ResultIterSpace.PreCond == nullptr ||
                 ResultIterSpace.NumIterations == nullptr ||
                 ResultIterSpace.CounterVar == nullptr ||
@@ -4976,6 +4983,9 @@ static unsigned CheckOpenMPLoop(
   Built.Inits.resize(NestedLoopCount);
   Built.Updates.resize(NestedLoopCount);
   Built.Finals.resize(NestedLoopCount);
+  Built.CounterInits.resize(NestedLoopCount);
+  Built.CounterSteps.resize(NestedLoopCount);
+  Built.CounterNumIterations.resize(NestedLoopCount);
   SmallVector<Expr *, 4> LoopMultipliers;
   {
     ExprResult Div;
@@ -5058,6 +5068,9 @@ static unsigned CheckOpenMPLoop(
       Built.Inits[Cnt] = Init.get();
       Built.Updates[Cnt] = Update.get();
       Built.Finals[Cnt] = Final.get();
+      Built.CounterInits[Cnt] = IS.CounterInit;
+      Built.CounterSteps[Cnt] = IS.CounterStep;
+      Built.CounterNumIterations[Cnt] = IS.NumIterations;
     }
   }
 

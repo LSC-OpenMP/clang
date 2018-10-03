@@ -158,8 +158,7 @@ public:
 
   /// Returns true if the current directive has one or more clauses of a
   /// specific kind.
-  template <typename SpecificClause>
-  bool hasClausesOfKind() const {
+  template <typename SpecificClause> bool hasClausesOfKind() const {
     auto Clauses = getClausesOfKind<SpecificClause>();
     return Clauses.begin() != Clauses.end();
   }
@@ -359,25 +358,43 @@ class OMPLoopDirective : public OMPExecutableDirective {
 
   /// \brief Get the updates storage.
   MutableArrayRef<Expr *> getInits() {
-    Expr **Storage = reinterpret_cast<Expr **>(
-        &*std::next(child_begin(),
-                    getArraysOffset(getDirectiveKind()) + 2 * CollapsedNum));
+    Expr **Storage = reinterpret_cast<Expr **>(&*std::next(
+        child_begin(), getArraysOffset(getDirectiveKind()) + 2 * CollapsedNum));
     return MutableArrayRef<Expr *>(Storage, CollapsedNum);
   }
 
   /// \brief Get the updates storage.
   MutableArrayRef<Expr *> getUpdates() {
-    Expr **Storage = reinterpret_cast<Expr **>(
-        &*std::next(child_begin(),
-                    getArraysOffset(getDirectiveKind()) + 3 * CollapsedNum));
+    Expr **Storage = reinterpret_cast<Expr **>(&*std::next(
+        child_begin(), getArraysOffset(getDirectiveKind()) + 3 * CollapsedNum));
     return MutableArrayRef<Expr *>(Storage, CollapsedNum);
   }
 
   /// \brief Get the final counter updates storage.
   MutableArrayRef<Expr *> getFinals() {
-    Expr **Storage = reinterpret_cast<Expr **>(
-        &*std::next(child_begin(),
-                    getArraysOffset(getDirectiveKind()) + 4 * CollapsedNum));
+    Expr **Storage = reinterpret_cast<Expr **>(&*std::next(
+        child_begin(), getArraysOffset(getDirectiveKind()) + 4 * CollapsedNum));
+    return MutableArrayRef<Expr *>(Storage, CollapsedNum);
+  }
+
+  /// \brief Get the final counter updates storage.
+  MutableArrayRef<Expr *> getCounterInits() {
+    Expr **Storage = reinterpret_cast<Expr **>(&*std::next(
+        child_begin(), getArraysOffset(getDirectiveKind()) + 5 * CollapsedNum));
+    return MutableArrayRef<Expr *>(Storage, CollapsedNum);
+  }
+
+  /// \brief Get the final counter updates storage.
+  MutableArrayRef<Expr *> getCounterSteps() {
+    Expr **Storage = reinterpret_cast<Expr **>(&*std::next(
+        child_begin(), getArraysOffset(getDirectiveKind()) + 6 * CollapsedNum));
+    return MutableArrayRef<Expr *>(Storage, CollapsedNum);
+  }
+
+  /// \brief Get the final counter updates storage.
+  MutableArrayRef<Expr *> getCounterNumIterations() {
+    Expr **Storage = reinterpret_cast<Expr **>(&*std::next(
+        child_begin(), getArraysOffset(getDirectiveKind()) + 7 * CollapsedNum));
     return MutableArrayRef<Expr *>(Storage, CollapsedNum);
   }
 
@@ -414,7 +431,7 @@ protected:
   /// \brief Children number.
   static unsigned numLoopChildren(unsigned CollapsedNum,
                                   OpenMPDirectiveKind Kind) {
-    return getArraysOffset(Kind) + 5 * CollapsedNum; // Counters,
+    return getArraysOffset(Kind) + 8 * CollapsedNum; // Counters,
                                                      // PrivateCounters, Inits,
                                                      // Updates and Finals
   }
@@ -431,9 +448,7 @@ protected:
   void setPreCond(Expr *PC) {
     *std::next(child_begin(), PreConditionOffset) = PC;
   }
-  void setCond(Expr *Cond) {
-    *std::next(child_begin(), CondOffset) = Cond;
-  }
+  void setCond(Expr *Cond) { *std::next(child_begin(), CondOffset) = Cond; }
   void setInit(Expr *Init) { *std::next(child_begin(), InitOffset) = Init; }
   void setLaneInit(Expr *LaneInit) {
     *std::next(child_begin(), LaneInitOffset) = LaneInit;
@@ -554,6 +569,9 @@ protected:
   void setInits(ArrayRef<Expr *> A);
   void setUpdates(ArrayRef<Expr *> A);
   void setFinals(ArrayRef<Expr *> A);
+  void setCounterInits(ArrayRef<Expr *> A);
+  void setCounterSteps(ArrayRef<Expr *> A);
+  void setCounterNumIterations(ArrayRef<Expr *> A);
 
 public:
   /// \brief The expressions built for the OpenMP loop CodeGen for the
@@ -622,6 +640,10 @@ public:
     SmallVector<Expr *, 4> Updates;
     /// \brief Final loop counter values for GodeGen.
     SmallVector<Expr *, 4> Finals;
+    /// Additional information need for Spark
+    SmallVector<Expr *, 4> CounterInits;
+    SmallVector<Expr *, 4> CounterSteps;
+    SmallVector<Expr *, 4> CounterNumIterations;
     /// Init statement for all captured expressions.
     Stmt *PreInits;
 
@@ -666,12 +688,18 @@ public:
       Inits.resize(Size);
       Updates.resize(Size);
       Finals.resize(Size);
+      CounterInits.resize(Size);
+      CounterSteps.resize(Size);
+      CounterNumIterations.resize(Size);
       for (unsigned i = 0; i < Size; ++i) {
         Counters[i] = nullptr;
         PrivateCounters[i] = nullptr;
         Inits[i] = nullptr;
         Updates[i] = nullptr;
         Finals[i] = nullptr;
+        CounterInits[i] = nullptr;
+        CounterSteps[i] = nullptr;
+        CounterNumIterations[i] = nullptr;
       }
       PreInits = nullptr;
     }
@@ -884,6 +912,26 @@ public:
     return const_cast<OMPLoopDirective *>(this)->getFinals();
   }
 
+  ArrayRef<Expr *> counter_inits() { return getCounterInits(); }
+
+  ArrayRef<Expr *> counter_inits() const {
+    return const_cast<OMPLoopDirective *>(this)->getCounterInits();
+  }
+
+  ArrayRef<Expr *> counter_steps() { return getCounterSteps(); }
+
+  ArrayRef<Expr *> counter_steps() const {
+    return const_cast<OMPLoopDirective *>(this)->getCounterSteps();
+  }
+
+  ArrayRef<Expr *> counter_num_iterations() {
+    return getCounterNumIterations();
+  }
+
+  ArrayRef<Expr *> counter_num_iterations() const {
+    return const_cast<OMPLoopDirective *>(this)->getCounterNumIterations();
+  }
+
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPSimdDirectiveClass ||
            T->getStmtClass() == OMPForDirectiveClass ||
@@ -901,13 +949,14 @@ public:
            T->getStmtClass() == OMPTargetSimdDirectiveClass ||
            T->getStmtClass() == OMPTeamsDistributeDirectiveClass ||
            T->getStmtClass() == OMPTeamsDistributeSimdDirectiveClass ||
-           T->getStmtClass() == OMPTeamsDistributeParallelForSimdDirectiveClass ||
+           T->getStmtClass() ==
+               OMPTeamsDistributeParallelForSimdDirectiveClass ||
            T->getStmtClass() == OMPTeamsDistributeParallelForDirectiveClass ||
            T->getStmtClass() ==
                OMPTargetTeamsDistributeParallelForDirectiveClass ||
            T->getStmtClass() ==
                OMPTargetTeamsDistributeParallelForSimdDirectiveClass ||
-           T->getStmtClass() == OMPTargetTeamsDistributeDirectiveClass||
+           T->getStmtClass() == OMPTargetTeamsDistributeDirectiveClass ||
            T->getStmtClass() == OMPTargetTeamsDistributeSimdDirectiveClass;
   }
 };
@@ -1845,7 +1894,8 @@ class OMPTaskwaitDirective : public OMPExecutableDirective {
   /// \param EndLoc Ending location of the directive.
   /// \param NumClauses Number of clauses.
   ///
-  OMPTaskwaitDirective(SourceLocation StartLoc, SourceLocation EndLoc, unsigned NumClauses)
+  OMPTaskwaitDirective(SourceLocation StartLoc, SourceLocation EndLoc,
+                       unsigned NumClauses)
       : OMPExecutableDirective(this, OMPTaskwaitDirectiveClass, OMPD_taskwait,
                                StartLoc, EndLoc, NumClauses, 0) {}
 
@@ -1854,7 +1904,8 @@ class OMPTaskwaitDirective : public OMPExecutableDirective {
   ///
   explicit OMPTaskwaitDirective(unsigned NumClauses)
       : OMPExecutableDirective(this, OMPTaskwaitDirectiveClass, OMPD_taskwait,
-                               SourceLocation(), SourceLocation(), NumClauses, 0) {}
+                               SourceLocation(), SourceLocation(), NumClauses,
+                               0) {}
 
 public:
   /// \brief Creates directive.
@@ -1864,17 +1915,18 @@ public:
   /// \param EndLoc Ending Location of the directive.
   /// \param Clauses List of clauses.
   ///
-  static OMPTaskwaitDirective *
-  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
-         ArrayRef<OMPClause *> Clauses);
+  static OMPTaskwaitDirective *Create(const ASTContext &C,
+                                      SourceLocation StartLoc,
+                                      SourceLocation EndLoc,
+                                      ArrayRef<OMPClause *> Clauses);
 
   /// \brief Creates an empty directive.
   ///
   /// \param C AST context.
   /// \param NumClauses Number of clauses.
   ///
-  static OMPTaskwaitDirective *CreateEmpty(const ASTContext &C, unsigned NumClauses,
-                                           EmptyShell);
+  static OMPTaskwaitDirective *CreateEmpty(const ASTContext &C,
+                                           unsigned NumClauses, EmptyShell);
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPTaskwaitDirectiveClass;
@@ -2330,7 +2382,7 @@ class OMPTargetDataDirective : public OMPExecutableDirective {
   ///
   OMPTargetDataDirective(SourceLocation StartLoc, SourceLocation EndLoc,
                          unsigned NumClauses)
-      : OMPExecutableDirective(this, OMPTargetDataDirectiveClass, 
+      : OMPExecutableDirective(this, OMPTargetDataDirectiveClass,
                                OMPD_target_data, StartLoc, EndLoc, NumClauses,
                                1) {}
 
@@ -2339,7 +2391,7 @@ class OMPTargetDataDirective : public OMPExecutableDirective {
   /// \param NumClauses Number of clauses.
   ///
   explicit OMPTargetDataDirective(unsigned NumClauses)
-      : OMPExecutableDirective(this, OMPTargetDataDirectiveClass, 
+      : OMPExecutableDirective(this, OMPTargetDataDirectiveClass,
                                OMPD_target_data, SourceLocation(),
                                SourceLocation(), NumClauses, 1) {}
 
@@ -2959,8 +3011,7 @@ class OMPDistributeDirective : public OMPLoopDirective {
   OMPDistributeDirective(SourceLocation StartLoc, SourceLocation EndLoc,
                          unsigned CollapsedNum, unsigned NumClauses)
       : OMPLoopDirective(this, OMPDistributeDirectiveClass, OMPD_distribute,
-                         StartLoc, EndLoc, CollapsedNum, NumClauses)
-        {}
+                         StartLoc, EndLoc, CollapsedNum, NumClauses) {}
 
   /// \brief Build an empty directive.
   ///
@@ -2970,8 +3021,7 @@ class OMPDistributeDirective : public OMPLoopDirective {
   explicit OMPDistributeDirective(unsigned CollapsedNum, unsigned NumClauses)
       : OMPLoopDirective(this, OMPDistributeDirectiveClass, OMPD_distribute,
                          SourceLocation(), SourceLocation(), CollapsedNum,
-                         NumClauses)
-        {}
+                         NumClauses) {}
 
 public:
   /// \brief Creates directive with a list of \a Clauses.
@@ -3168,8 +3218,8 @@ class OMPDistributeParallelForSimdDirective final : public OMPLoopDirective {
                                         unsigned CollapsedNum,
                                         unsigned NumClauses)
       : OMPLoopDirective(this, OMPDistributeParallelForSimdDirectiveClass,
-                         OMPD_distribute_parallel_for_simd, StartLoc, 
-                         EndLoc, CollapsedNum, NumClauses) {}
+                         OMPD_distribute_parallel_for_simd, StartLoc, EndLoc,
+                         CollapsedNum, NumClauses) {}
 
   /// Build an empty directive.
   ///
@@ -3179,9 +3229,8 @@ class OMPDistributeParallelForSimdDirective final : public OMPLoopDirective {
   explicit OMPDistributeParallelForSimdDirective(unsigned CollapsedNum,
                                                  unsigned NumClauses)
       : OMPLoopDirective(this, OMPDistributeParallelForSimdDirectiveClass,
-                         OMPD_distribute_parallel_for_simd, 
-                         SourceLocation(), SourceLocation(), CollapsedNum,
-                         NumClauses) {}
+                         OMPD_distribute_parallel_for_simd, SourceLocation(),
+                         SourceLocation(), CollapsedNum, NumClauses) {}
 
 public:
   /// Creates directive with a list of \a Clauses.
@@ -3194,10 +3243,10 @@ public:
   /// \param AssociatedStmt Statement, associated with the directive.
   /// \param Exprs Helper expressions for CodeGen.
   ///
-  static OMPDistributeParallelForSimdDirective *Create(
-      const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
-      unsigned CollapsedNum, ArrayRef<OMPClause *> Clauses,
-      Stmt *AssociatedStmt, const HelperExprs &Exprs);
+  static OMPDistributeParallelForSimdDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         unsigned CollapsedNum, ArrayRef<OMPClause *> Clauses,
+         Stmt *AssociatedStmt, const HelperExprs &Exprs);
 
   /// Creates an empty directive with the place for \a NumClauses clauses.
   ///
@@ -3205,9 +3254,9 @@ public:
   /// \param CollapsedNum Number of collapsed nested loops.
   /// \param NumClauses Number of clauses.
   ///
-  static OMPDistributeParallelForSimdDirective *CreateEmpty(
-      const ASTContext &C, unsigned NumClauses, unsigned CollapsedNum,
-      EmptyShell);
+  static OMPDistributeParallelForSimdDirective *
+  CreateEmpty(const ASTContext &C, unsigned NumClauses, unsigned CollapsedNum,
+              EmptyShell);
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPDistributeParallelForSimdDirectiveClass;
@@ -3243,7 +3292,7 @@ class OMPDistributeSimdDirective final : public OMPLoopDirective {
   /// \param CollapsedNum Number of collapsed nested loops.
   /// \param NumClauses Number of clauses.
   ///
-  explicit OMPDistributeSimdDirective(unsigned CollapsedNum, 
+  explicit OMPDistributeSimdDirective(unsigned CollapsedNum,
                                       unsigned NumClauses)
       : OMPLoopDirective(this, OMPDistributeSimdDirectiveClass,
                          OMPD_distribute_simd, SourceLocation(),
@@ -3300,8 +3349,9 @@ class OMPTargetParallelForSimdDirective final : public OMPLoopDirective {
   /// \param CollapsedNum Number of collapsed nested loops.
   /// \param NumClauses Number of clauses.
   ///
-  OMPTargetParallelForSimdDirective(SourceLocation StartLoc, SourceLocation EndLoc,
-                                unsigned CollapsedNum, unsigned NumClauses)
+  OMPTargetParallelForSimdDirective(SourceLocation StartLoc,
+                                    SourceLocation EndLoc,
+                                    unsigned CollapsedNum, unsigned NumClauses)
       : OMPLoopDirective(this, OMPTargetParallelForSimdDirectiveClass,
                          OMPD_target_parallel_for_simd, StartLoc, EndLoc,
                          CollapsedNum, NumClauses) {}
@@ -3370,9 +3420,8 @@ class OMPTargetSimdDirective final : public OMPLoopDirective {
   ///
   OMPTargetSimdDirective(SourceLocation StartLoc, SourceLocation EndLoc,
                          unsigned CollapsedNum, unsigned NumClauses)
-      : OMPLoopDirective(this, OMPTargetSimdDirectiveClass,
-                         OMPD_target_simd, StartLoc, EndLoc, CollapsedNum,
-                         NumClauses) {}
+      : OMPLoopDirective(this, OMPTargetSimdDirectiveClass, OMPD_target_simd,
+                         StartLoc, EndLoc, CollapsedNum, NumClauses) {}
 
   /// Build an empty directive.
   ///
@@ -3380,8 +3429,8 @@ class OMPTargetSimdDirective final : public OMPLoopDirective {
   /// \param NumClauses Number of clauses.
   ///
   explicit OMPTargetSimdDirective(unsigned CollapsedNum, unsigned NumClauses)
-      : OMPLoopDirective(this, OMPTargetSimdDirectiveClass, OMPD_target_simd, 
-                         SourceLocation(),SourceLocation(), CollapsedNum,
+      : OMPLoopDirective(this, OMPTargetSimdDirectiveClass, OMPD_target_simd,
+                         SourceLocation(), SourceLocation(), CollapsedNum,
                          NumClauses) {}
 
 public:
@@ -3408,8 +3457,7 @@ public:
   ///
   static OMPTargetSimdDirective *CreateEmpty(const ASTContext &C,
                                              unsigned NumClauses,
-                                             unsigned CollapsedNum,
-                                             EmptyShell);
+                                             unsigned CollapsedNum, EmptyShell);
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPTargetSimdDirectiveClass;
@@ -3436,9 +3484,9 @@ class OMPTeamsDistributeDirective final : public OMPLoopDirective {
   ///
   OMPTeamsDistributeDirective(SourceLocation StartLoc, SourceLocation EndLoc,
                               unsigned CollapsedNum, unsigned NumClauses)
-      : OMPLoopDirective(this, OMPTeamsDistributeDirectiveClass, 
-                         OMPD_teams_distribute, StartLoc, EndLoc, 
-                         CollapsedNum, NumClauses) {}
+      : OMPLoopDirective(this, OMPTeamsDistributeDirectiveClass,
+                         OMPD_teams_distribute, StartLoc, EndLoc, CollapsedNum,
+                         NumClauses) {}
 
   /// Build an empty directive.
   ///
@@ -3578,7 +3626,7 @@ class OMPTeamsDistributeParallelForSimdDirective final
                                              unsigned CollapsedNum,
                                              unsigned NumClauses)
       : OMPLoopDirective(this, OMPTeamsDistributeParallelForSimdDirectiveClass,
-                         OMPD_teams_distribute_parallel_for_simd, StartLoc, 
+                         OMPD_teams_distribute_parallel_for_simd, StartLoc,
                          EndLoc, CollapsedNum, NumClauses) {}
 
   /// Build an empty directive.
@@ -3589,7 +3637,7 @@ class OMPTeamsDistributeParallelForSimdDirective final
   explicit OMPTeamsDistributeParallelForSimdDirective(unsigned CollapsedNum,
                                                       unsigned NumClauses)
       : OMPLoopDirective(this, OMPTeamsDistributeParallelForSimdDirectiveClass,
-                         OMPD_teams_distribute_parallel_for_simd, 
+                         OMPD_teams_distribute_parallel_for_simd,
                          SourceLocation(), SourceLocation(), CollapsedNum,
                          NumClauses) {}
 
@@ -3743,11 +3791,9 @@ public:
   /// \param Clauses List of clauses.
   /// \param AssociatedStmt Statement, associated with the directive.
   ///
-  static OMPTargetTeamsDirective *Create(const ASTContext &C,
-                                         SourceLocation StartLoc,
-                                         SourceLocation EndLoc,
-                                         ArrayRef<OMPClause *> Clauses,
-                                         Stmt *AssociatedStmt);
+  static OMPTargetTeamsDirective *
+  Create(const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
+         ArrayRef<OMPClause *> Clauses, Stmt *AssociatedStmt);
 
   /// Creates an empty directive with the place for \a NumClauses clauses.
   ///
@@ -3820,9 +3866,10 @@ public:
   /// \param CollapsedNum Number of collapsed nested loops.
   /// \param NumClauses Number of clauses.
   ///
-  static OMPTargetTeamsDistributeDirective *
-  CreateEmpty(const ASTContext &C, unsigned NumClauses, unsigned CollapsedNum,
-              EmptyShell);
+  static OMPTargetTeamsDistributeDirective *CreateEmpty(const ASTContext &C,
+                                                        unsigned NumClauses,
+                                                        unsigned CollapsedNum,
+                                                        EmptyShell);
 
   static bool classof(const Stmt *T) {
     return T->getStmtClass() == OMPTargetTeamsDistributeDirectiveClass;

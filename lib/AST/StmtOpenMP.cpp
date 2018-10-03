@@ -54,6 +54,25 @@ void OMPLoopDirective::setFinals(ArrayRef<Expr *> A) {
   std::copy(A.begin(), A.end(), getFinals().begin());
 }
 
+
+void OMPLoopDirective::setCounterInits(ArrayRef<Expr *> A){
+  assert(A.size() == getCollapsedNumber() &&
+         "Number of counter inits is not the same as the collapsed number");
+  std::copy(A.begin(), A.end(), getCounterInits().begin());
+}
+
+void OMPLoopDirective::setCounterSteps(ArrayRef<Expr *> A){
+  assert(A.size() == getCollapsedNumber() &&
+         "Number of counter steps is not the same as the collapsed number");
+  std::copy(A.begin(), A.end(), getCounterSteps().begin());
+}
+
+void OMPLoopDirective::setCounterNumIterations(ArrayRef<Expr *> A){
+  assert(A.size() == getCollapsedNumber() &&
+         "Number of counter finals is not the same as the collapsed number");
+  std::copy(A.begin(), A.end(), getCounterNumIterations().begin());
+}
+
 OMPParallelDirective *OMPParallelDirective::Create(
     const ASTContext &C, SourceLocation StartLoc, SourceLocation EndLoc,
     ArrayRef<OMPClause *> Clauses, Stmt *AssociatedStmt, bool HasCancel) {
@@ -403,6 +422,9 @@ OMPParallelForDirective *OMPParallelForDirective::Create(
   Dir->setUpdates(Exprs.Updates);
   Dir->setFinals(Exprs.Finals);
   Dir->setPreInits(Exprs.PreInits);
+  Dir->setCounterInits(Exprs.CounterInits);
+  Dir->setCounterSteps(Exprs.CounterSteps);
+  Dir->setCounterNumIterations(Exprs.CounterNumIterations);
   Dir->setHasCancel(HasCancel);
   return Dir;
 }
