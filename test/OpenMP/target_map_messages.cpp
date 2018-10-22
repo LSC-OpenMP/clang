@@ -26,7 +26,14 @@ struct SA {
   T d;
   float e[I];
   T *f;
+  int bf : 20;
   void func(int arg) {
+    #pragma omp target
+    {
+      a = 0.0;
+      func(arg);
+      bf = 20;
+    }
     #pragma omp target map(arg,a,d)
     {}
     #pragma omp target map(arg[2:2],a,d) // expected-error {{subscripted value is not an array or pointer}}
@@ -100,6 +107,25 @@ union SD {
   float B;
 };
 
+struct SA1{
+  int a;
+  struct SA1 *p;
+  int b[10];
+};
+struct SB1{
+  int a;
+  struct SA1 s;
+  struct SA1 sa[10];
+  struct SA1 *sp[10];
+  struct SA1 *p;
+};
+struct SC1{
+  int a;
+  struct SB1 s;
+  struct SB1 *p;
+  int b[10];
+};
+
 void SAclient(int arg) {
   SA<int,123> s;
   s.func(arg); // expected-note {{in instantiation of member function}}
@@ -111,6 +137,8 @@ void SAclient(int arg) {
   const int m = 1;
   double mvla2[5][arg][m+n+10];
 
+  SC1 s1;
+  SC1 *p1;
   SB *p;
 
   SD u;
@@ -267,6 +295,11 @@ void SAclient(int arg) {
   {}
   #pragma omp target map(u.B)  // expected-error {{mapped storage cannot be derived from a union}}
   {}
+  #pragma omp target
+  {
+    u.B = 0;
+    r.S.foo();
+  }
 
   #pragma omp target data map(to: r.C) //expected-note {{used here}}
   {
@@ -302,6 +335,41 @@ void SAclient(int arg) {
     {}
   }
   }
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.s.s)
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.s.s.a)
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.b[:5])
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.p[:5])
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.s.sa[3].a)
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.s.sp[3]->a)
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.p->a)
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.s.p->a)
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.s.s.b[:2])
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.s.p->b[:2])
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+// expected-note@+1 {{used here}}
+#pragma omp target map(s1.p->p->p->a)
+  { s1.a++; } // expected-error {{variable already marked as mapped in current construct}}
+#pragma omp target map(s1.s.s.b[:2])
+  { s1.s.s.b[0]++; }
 }
 void foo() {
 }

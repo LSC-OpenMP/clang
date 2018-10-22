@@ -1097,6 +1097,15 @@ private:
   };
   OpenMPCancelExitStack OMPCancelStack;
 
+  CodeGenPGO PGO;
+
+  /// Calculate branch weights appropriate for PGO data
+  llvm::MDNode *createProfileWeights(uint64_t TrueCount, uint64_t FalseCount);
+  llvm::MDNode *createProfileWeights(ArrayRef<uint64_t> Weights);
+  llvm::MDNode *createProfileWeightsForLoop(const Stmt *Cond,
+                                            uint64_t LoopCount);
+
+public:
   /// Controls insertion of cancellation exit blocks in worksharing constructs.
   class OMPCancelStackRAII {
     CodeGenFunction &CGF;
@@ -1110,15 +1119,6 @@ private:
     ~OMPCancelStackRAII() { CGF.OMPCancelStack.exit(CGF); }
   };
 
-  CodeGenPGO PGO;
-
-  /// Calculate branch weights appropriate for PGO data
-  llvm::MDNode *createProfileWeights(uint64_t TrueCount, uint64_t FalseCount);
-  llvm::MDNode *createProfileWeights(ArrayRef<uint64_t> Weights);
-  llvm::MDNode *createProfileWeightsForLoop(const Stmt *Cond,
-                                            uint64_t LoopCount);
-
-public:
   /// Increment the profiler's counter for the given statement.
   void incrementProfileCounter(const Stmt *S) {
     if (CGM.getCodeGenOpts().hasProfileClangInstr())
@@ -1891,6 +1891,8 @@ public:
   /// appropriate alignment.
   Address CreateMemTemp(QualType T, const Twine &Name = "tmp");
   Address CreateMemTemp(QualType T, CharUnits Align, const Twine &Name = "tmp");
+
+  void EmitNaNsInit(CharUnits Align, llvm::Value *Size, llvm::Value *Alloca);
 
   /// CreateAggTemp - Create a temporary memory object for the given
   /// aggregate type.
@@ -2791,6 +2793,9 @@ public:
   /// \brief Emit a helper variable and return corresponding lvalue.
   LValue EmitOMPHelperVar(const DeclRefExpr *Helper);
   void EmitOMPHelperVar(const VarDecl *VDecl);
+
+  /// Emits the lvalue for the expression with possibly captured variable.
+  LValue EmitOMPSharedLValue(const Expr *E);
 
 private:
   /// Helpers for blocks

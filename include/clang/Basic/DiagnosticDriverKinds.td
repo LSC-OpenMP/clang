@@ -29,6 +29,11 @@ def err_drv_no_cuda_installation : Error<
 def err_drv_no_cuda_libdevice : Error<
   "cannot find libdevice for %0. Provide path to different CUDA installation "
   "via --cuda-path, or pass -nocudalib to build without linking with libdevice.">;
+def err_drv_cuda_version_unsupported : Error<
+  "GPU arch %0 is supported by CUDA versions between %1 and %2 (inclusive), "
+  "but installation at %3 is %4.  Use --cuda-path to specify a different CUDA "
+  "install, pass a different GPU arch with --cuda-gpu-arch, or pass "
+  "--no-cuda-version-check.">;
 def err_drv_cuda_version_too_low : Error<
   "GPU arch %1 requires CUDA version at least %3, but installation at %0 is %2. "
   "Use --cuda-path to specify a different CUDA install, or pass "
@@ -69,6 +74,10 @@ def err_drv_invalid_Xarch_argument_with_args : Error<
   "invalid Xarch argument: '%0', options requiring arguments are unsupported">;
 def err_drv_invalid_Xarch_argument_isdriver : Error<
   "invalid Xarch argument: '%0', cannot change driver behavior inside Xarch argument">;
+def err_drv_Xopenmp_target_missing_triple : Error<
+  "cannot deduce implicit triple value for -Xopenmp-target, specify triple using -Xopenmp-target=<triple>">;
+def err_drv_invalid_Xopenmp_target_with_args : Error<
+  "invalid -Xopenmp-target argument: '%0', options requiring arguments are unsupported">;
 def err_drv_argument_only_allowed_with : Error<
   "invalid argument '%0' only allowed with '%1'">;
 def err_drv_argument_not_allowed_with : Error<
