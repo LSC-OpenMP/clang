@@ -742,11 +742,11 @@ enum OpenMPRTLFunction {
   OMPRTL__kmpc_push_target_tripcount,
   // Call to int32_t __tgt_target(int64_t device_id, void *host_ptr, int32_t
   // arg_num, void** args_base, void **args, size_t *arg_sizes, int64_t
-  // *arg_types);
+  // *arg_types, void *htask);
   OMPRTL__tgt_target,
   // Call to int32_t __tgt_target_nowait(int64_t device_id, void *host_ptr,
   // int32_t arg_num, void** args_base, void **args, size_t *arg_sizes,
-  // int64_t *arg_types);
+  // int64_t *arg_types, void *htask);
   OMPRTL__tgt_target_nowait,
   // Call to int32_t __tgt_target_teams(int64_t device_id, void *host_ptr,
   // int32_t arg_num, void** args_base, void **args, size_t *arg_sizes, int64_t
@@ -1715,6 +1715,7 @@ llvm::Type *CGOpenMPRuntime::getKmpc_MicroPointerTy() {
 
 llvm::Constant *
 CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
+  printf("CGOpenMPRuntime::createRuntimeFunction\n");
   llvm::Constant *RTLFn = nullptr;
   switch (static_cast<OpenMPRTLFunction>(Function)) {
   case OMPRTL__kmpc_fork_call: {
@@ -1917,11 +1918,11 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
   case OMPRTL__kmpc_omp_task_alloc: {
     // Build kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32 gtid,
     // kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-    // kmp_routine_entry_t *task_entry);
+    // kmp_routine_entry_t *task_entry); HTASK inserted isDev devId
     assert(KmpRoutineEntryPtrTy != nullptr &&
            "Type kmp_routine_entry_t must be created.");
     llvm::Type *TypeParams[] = {getIdentTyPointerTy(), CGM.Int32Ty, CGM.Int32Ty,
-                                CGM.SizeTy, CGM.SizeTy, KmpRoutineEntryPtrTy};
+                                CGM.SizeTy, CGM.SizeTy, KmpRoutineEntryPtrTy, CGM.Int32Ty, CGM.Int32Ty};
     // Return void * and then cast to particular kmp_task_t type.
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.VoidPtrTy, TypeParams, /*isVarArg=*/false);
@@ -2246,14 +2247,15 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
   case OMPRTL__tgt_target: {
     // Build int32_t __tgt_target(int64_t device_id, void *host_ptr, int32_t
     // arg_num, void** args_base, void **args, size_t *arg_sizes, int64_t
-    // *arg_types);
+    // *arg_types, void* htask);
     llvm::Type *TypeParams[] = {CGM.Int64Ty,
                                 CGM.VoidPtrTy,
                                 CGM.Int32Ty,
                                 CGM.VoidPtrPtrTy,
                                 CGM.VoidPtrPtrTy,
                                 CGM.SizeTy->getPointerTo(),
-                                CGM.Int64Ty->getPointerTo()};
+                                CGM.Int64Ty->getPointerTo(),
+    				CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target");
@@ -2280,14 +2282,16 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
   case OMPRTL__tgt_target_nowait: {
     // Build int32_t __tgt_target_nowait(int64_t device_id, void *host_ptr,
     // int32_t arg_num, void** args_base, void **args, size_t *arg_sizes,
-    // int64_t *arg_types);
+    // int64_t *arg_types, void* htask);
+    printf("#-building __tgt_target_nowait-#\n");
     llvm::Type *TypeParams[] = {CGM.Int64Ty,
                                 CGM.VoidPtrTy,
                                 CGM.Int32Ty,
                                 CGM.VoidPtrPtrTy,
                                 CGM.VoidPtrPtrTy,
                                 CGM.SizeTy->getPointerTo(),
-                                CGM.Int64Ty->getPointerTo()};
+                                CGM.Int64Ty->getPointerTo(),
+    				CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_nowait");
@@ -2583,6 +2587,7 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
   }
   }
   assert(RTLFn && "Unable to find OpenMP runtime function");
+  printf("exit createRuntimeFunction\n");
   return RTLFn;
 }
 
@@ -3726,6 +3731,12 @@ enum KmpTaskTFields {
   KmpTaskTLastIter,
   /// (Taskloops only) Reduction data.
   KmpTaskTReductions,
+  /// Htask is dev
+  IsDev,
+  /// Htask dev id
+  DevId,
+  /// Htask flag
+  Flag
 };
 } // anonymous namespace
 
@@ -4590,6 +4601,10 @@ createKmpTaskTRecordDecl(CodeGenModule &CGM, OpenMPDirectiveKind Kind,
   //         kmp_int32           part_id;
   //         kmp_cmplrdata_t data1;
   //         kmp_cmplrdata_t data2;
+  // htask
+  //         kmp_int32		isDev
+  //         kmp_int32		devId
+  //         kmp_int32          flag
   // For taskloops additional fields:
   //         kmp_uint64          lb;
   //         kmp_uint64          ub;
@@ -4610,6 +4625,9 @@ createKmpTaskTRecordDecl(CodeGenModule &CGM, OpenMPDirectiveKind Kind,
   addFieldToRecordDecl(C, RD, KmpInt32Ty);
   addFieldToRecordDecl(C, RD, KmpCmplrdataTy);
   addFieldToRecordDecl(C, RD, KmpCmplrdataTy);
+  addFieldToRecordDecl(C, RD, KmpInt32Ty);  // htask isDev
+  addFieldToRecordDecl(C, RD, KmpInt32Ty);  // htask devId
+  addFieldToRecordDecl(C, RD, KmpInt32Ty);  // htask flag
   if (isOpenMPTaskLoopDirective(Kind)) {
     QualType KmpUInt64Ty =
         CGM.getContext().getIntTypeForBitwidth(/*DestWidth=*/64, /*Signed=*/0);
@@ -4661,6 +4679,8 @@ emitProxyTaskFunction(CodeGenModule &CGM, SourceLocation Loc,
                       QualType KmpTaskTWithPrivatesQTy, QualType KmpTaskTQTy,
                       QualType SharedsPtrTy, llvm::Value *TaskFunction,
                       llvm::Value *TaskPrivatesMap) {
+
+  printf("#-emitProxyTaskFunction-#\n");
   auto &C = CGM.getContext();
   FunctionArgList Args;
   ImplicitParamDecl GtidArg(C, /*DC=*/nullptr, Loc, /*Id=*/nullptr, KmpInt32Ty,
@@ -4676,10 +4696,12 @@ emitProxyTaskFunction(CodeGenModule &CGM, SourceLocation Loc,
   auto *TaskEntry =
       llvm::Function::Create(TaskEntryTy, llvm::GlobalValue::InternalLinkage,
                              ".omp_task_entry.", &CGM.getModule());
+
   CGM.SetInternalFunctionAttributes(/*D=*/nullptr, TaskEntry, TaskEntryFnInfo);
   CodeGenFunction CGF(CGM);
   CGF.StartFunction(GlobalDecl(), KmpInt32Ty, TaskEntry, TaskEntryFnInfo, Args,
                     Loc, Loc);
+
 
   // TaskFunction(gtid, tt->task_data.part_id, &tt->privates, task_privates_map,
   // tt,
@@ -4746,13 +4768,18 @@ emitProxyTaskFunction(CodeGenModule &CGM, SourceLocation Loc,
     CallArgs.push_back(RParam);
   }
   CallArgs.push_back(SharedsParam);
+  printf("emitProxyTaskFunction first dumping TaskEntry\n");
+  TaskEntry->dump();
 
   CGM.getOpenMPRuntime().emitOutlinedFunctionCall(CGF, Loc, TaskFunction,
                                                   CallArgs);
+  printf("emitProxyTaskFunction second dumping TaskEntry\n");
+  TaskEntry->dump();
   CGF.EmitStoreThroughLValue(
       RValue::get(CGF.Builder.getInt32(/*C=*/0)),
       CGF.MakeAddrLValue(CGF.ReturnValue, KmpInt32Ty));
   CGF.FinishFunction();
+ // printf("emitProxyTaskFunction exit %s\n", CGF.CurFuncDecl->getAsFunction()->getName());
   return TaskEntry;
 }
 
@@ -5153,6 +5180,7 @@ CGOpenMPRuntime::TaskResultTy CGOpenMPRuntime::emitTaskInit(
     CodeGenFunction &CGF, SourceLocation Loc, const OMPExecutableDirective &D,
     llvm::Value *TaskFunction, QualType SharedsTy, Address Shareds,
     const OMPTaskDataTy &Data) {
+  printf("emitTaskInit\n");
   auto &C = CGM.getContext();
   llvm::SmallVector<PrivateDataTy, 4> Privates;
   // Aggregate privates and sort them by the alignment.
@@ -5287,10 +5315,14 @@ CGOpenMPRuntime::TaskResultTy CGOpenMPRuntime::emitTaskInit(
   }
   // Build a proxy function kmp_int32 .omp_task_entry.(kmp_int32 gtid,
   // kmp_task_t *tt);
+  //
   auto *TaskEntry = emitProxyTaskFunction(
       CGM, Loc, D.getDirectiveKind(), KmpInt32Ty, KmpTaskTWithPrivatesPtrQTy,
       KmpTaskTWithPrivatesQTy, KmpTaskTQTy, SharedsPtrTy, TaskFunction,
       TaskPrivatesMap);
+
+  printf("emitTaskInit dumping TaskEntry: \n");
+  TaskEntry->dump();
 
   // Build call kmp_task_t * __kmpc_omp_task_alloc(ident_t *, kmp_int32 gtid,
   // kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
@@ -5344,7 +5376,9 @@ CGOpenMPRuntime::TaskResultTy CGOpenMPRuntime::emitTaskInit(
                                 KmpTaskTWithPrivatesTySize,
                                 SharedsSize,
                                 CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
-                                    TaskEntry, KmpRoutineEntryPtrTy)};
+                                    TaskEntry, KmpRoutineEntryPtrTy),
+    				CGF.Builder.getInt32(/*C=*/0),
+    				CGF.Builder.getInt32(/*C=*/0)};
     NewTask = CGF.EmitRuntimeCall(
         createRuntimeFunction(OMPRTL__kmpc_omp_task_alloc), AllocArgs);
   }
@@ -5419,6 +5453,7 @@ void CGOpenMPRuntime::emitTaskLoopCall(CodeGenFunction &CGF, SourceLocation Loc,
                                        QualType SharedsTy, Address Shareds,
                                        const Expr *IfCond,
                                        const OMPTaskDataTy &Data) {
+  printf("emitTaskLoopCall\n");
   if (!CGF.HaveInsertPoint())
     return;
   TaskResultTy Result =
@@ -6365,6 +6400,7 @@ void CGOpenMPRuntime::emitInlinedDirective(CodeGenFunction &CGF,
                                            OpenMPDirectiveKind InnerKind,
                                            const RegionCodeGenTy &CodeGen,
                                            bool HasCancel) {
+  printf("emitInlinedDirective\n");
   if (!CGF.HaveInsertPoint())
     return;
   InlinedOpenMPRegionRAII Region(CGF, CodeGen, InnerKind, HasCancel);
@@ -6510,6 +6546,7 @@ void CGOpenMPRuntime::emitTargetOutlinedFunction(
     llvm::Function *&OutlinedFn, llvm::Constant *&OutlinedFnID,
     bool IsOffloadEntry, const RegionCodeGenTy &CodeGen,
     unsigned CaptureLevel) {
+  printf("emitTargetOutlinedFunction\n");
   assert(!ParentName.empty() && "Invalid target region parent name!");
 
   emitTargetOutlinedFunctionHelper(D, ParentName, OutlinedFn, OutlinedFnID,
@@ -6520,6 +6557,7 @@ llvm::Function *
 CGOpenMPRuntime::outlineTargetDirective(const OMPExecutableDirective &D,
                                         StringRef Name,
                                         const RegionCodeGenTy &CodeGen) {
+  printf("outlineTargetDirective\n");
   bool HasDependClause = D.hasClausesOfKind<OMPDependClause>();
   const auto *C = cast<CapturedStmt>(D.getAssociatedStmt());
   if (HasDependClause)
@@ -6555,7 +6593,7 @@ void CGOpenMPRuntime::emitTargetOutlinedFunctionHelper(
   // where DD_FFFF is an ID unique to the file (device and file IDs), PP is the
   // mangled name of the function that encloses the target region and BB is the
   // line number of the target region.
-
+  printf("emitTargetOutlinedFunctionHelper\n");
   unsigned DeviceID;
   unsigned FileID;
   unsigned Line;
@@ -6568,6 +6606,7 @@ void CGOpenMPRuntime::emitTargetOutlinedFunctionHelper(
        << llvm::format("_%x_", FileID) << ParentName << "_l" << Line;
   }
 
+  printf("emitTargetOutlinedFunctionHelper exiting\n");
   OutlinedFn = outlineTargetDirective(D, EntryFnName, CodeGen);
 
   // If this target outline function is not an offload entry, we don't need to
@@ -7444,6 +7483,7 @@ void CGOpenMPRuntime::emitTaskCall(
     CodeGenFunction &CGF, SourceLocation Loc, const OMPExecutableDirective &D,
     llvm::Value *TaskFunction, QualType SharedsTy, Address Shareds,
     const Expr *IfCond, const OMPTaskDataTy &Data) {
+  printf("emitTaskCall\n");
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -7457,6 +7497,8 @@ void CGOpenMPRuntime::emitTaskCall(
   // Process list of dependences.
   Address DependenciesArray =
       emitDependences(CGF, Data.Dependences, KmpDependInfoTy);
+  printf("emitTaskCall first dumping\n");
+  TaskEntry->dump();
 
   // NOTE: routine and part_id fields are intialized by __kmpc_omp_task_alloc()
   // libcall.
@@ -7547,6 +7589,8 @@ void CGOpenMPRuntime::emitTaskCall(
     RegionCodeGenTy ThenRCG(ThenCodeGen);
     ThenRCG(CGF);
   }
+  printf("emitTaskCall second dumping\n");
+  TaskEntry->dump();
 }
 
 void CGOpenMPRuntime::emitTargetCall(
@@ -7554,6 +7598,7 @@ void CGOpenMPRuntime::emitTargetCall(
     llvm::Value *OutlinedFn, llvm::Value *OutlinedFnID, const Expr *IfCond,
     const Expr *Device, ArrayRef<llvm::Value *> CapturedVars,
     OMPMapArrays &MapArrays) {
+  printf("emitTargetCall func: %s\n", CGF.CurFn->getName());
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -7704,6 +7749,7 @@ void CGOpenMPRuntime::emitTargetCall(
     // of having any clauses associated. If the user is using teams but no
     // clauses, these two values will be the default that should be passed to
     // the runtime library - a 32-bit integer with the value zero.
+
     if (NumTeams) {
       assert(ThreadLimit && "Thread limit expression should be available along "
                             "with number of teams.");
@@ -7721,11 +7767,32 @@ void CGOpenMPRuntime::emitTargetCall(
         Return = CGF.EmitRuntimeCall(
             RT.createRuntimeFunction(OMPRTL__tgt_target_teams), OffloadingArgs);
     } else {
+
+    llvm::Value *tmp;
+    printf("emitTargetCall dumping:\n");
+    for(llvm::Argument &A : CGF.CurFn->args()){
+	    printf("Argument name: %s\n", A.getName());
+//	    printf("Argument type: "); A.getType()->dump(); printf("\n");
+	    printf("Argument number: %d\n", A.getArgNo());
+	    A.dump();
+	    if(A.getArgNo()==4) tmp = static_cast<llvm::Value*>(&A);
+    }
+
+//    tmp = OutlinedFnID;
+
+    printf("Dump OutlinedFnID name: %s\n", OutlinedFnID->getName());
+    OutlinedFnID->getType()->dump();
+    OutlinedFnID->dump();
+    printf("Dump tmp %s\n", tmp->getName());
+    tmp->dump();
+
+
+
       llvm::Value *OffloadingArgs[] = {
           DeviceID,           OutlinedFnID,
           PointerNum,         Info.BasePointersArray,
           Info.PointersArray, Info.SizesArray,
-          Info.MapTypesArray};
+          Info.MapTypesArray, tmp};
       if (hasNowait)
         Return = CGF.EmitRuntimeCall(
             RT.createRuntimeFunction(OMPRTL__tgt_target_nowait),
@@ -7734,6 +7801,10 @@ void CGOpenMPRuntime::emitTargetCall(
         Return = CGF.EmitRuntimeCall(
             RT.createRuntimeFunction(OMPRTL__tgt_target), OffloadingArgs);
     }
+
+    
+
+    CGF.CurFn->dump();
 
     // Check the error code and execute the host version if required.
     llvm::BasicBlock *OffloadFailedBlock =
@@ -7797,7 +7868,6 @@ void CGOpenMPRuntime::emitTargetCall(
   Address CapturedStruct = CGF.GenerateCapturedStmtArgument(*CS);
   QualType SharedsTy =
       CGF.getContext().getRecordType(CS->getCapturedRecordDecl());
-
   auto &&TaskGen = [&D, SharedsTy, CapturedStruct](CodeGenFunction &CGF,
                                                    llvm::Value *OutlinedFn,
                                                    const OMPTaskDataTy &Data) {
@@ -7805,6 +7875,7 @@ void CGOpenMPRuntime::emitTargetCall(
                                             SharedsTy, CapturedStruct,
                                             /*IfCond=*/nullptr, Data);
   };
+
   auto &&TaskThenGen = [this, &D, &ThenGen, &TaskGen, hasNowait,
                         &Data](CodeGenFunction &CGF, PrePostActionTy &) {
     // Clear list of dependecies and firstprivates because we're reusing the
@@ -7817,6 +7888,7 @@ void CGOpenMPRuntime::emitTargetCall(
     if (!hasNowait)
       emitTaskwaitCall(CGF, D.getLocStart());
   };
+
   auto &&TaskElseGen = [this, &D, &ElseGen, &TaskGen, hasNowait,
                         &Data](CodeGenFunction &CGF, PrePostActionTy &) {
     // Clear list of dependecies and firstprivates because we're reusing the
@@ -7840,6 +7912,7 @@ void CGOpenMPRuntime::emitTargetCall(
     RegionCodeGenTy ElseRCG(TaskElseGen);
     ElseRCG(CGF);
   }
+
 
 }
 
@@ -9874,9 +9947,11 @@ void CGOpenMPRuntime::emitCall(CodeGenFunction &CGF, llvm::Value *Callee,
 void CGOpenMPRuntime::emitOutlinedFunctionCall(
     CodeGenFunction &CGF, SourceLocation Loc, llvm::Value *OutlinedFn,
     ArrayRef<llvm::Value *> Args) const {
+  printf("#-emitOutlinedFunctionCall-# func = %s\n", CGF.CurFn->getName());
   assert(Loc.isValid() && "Outlined function call location must be valid.");
   emitCall(CGF, OutlinedFn, Args, Loc);
 }
+
 
 Address CGOpenMPRuntime::getParameterAddress(CodeGenFunction &CGF,
                                              const VarDecl *NativeParam,
