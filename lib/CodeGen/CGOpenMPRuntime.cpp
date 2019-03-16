@@ -2264,7 +2264,7 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
   case OMPRTL__tgt_target_teams: {
     // Build int32_t __tgt_target_teams(int64_t device_id, void *host_ptr,
     // int32_t arg_num, void** args_base, void **args, size_t *arg_sizes,
-    // int64_t *arg_types, int32_t num_teams, int32_t thread_limit);
+    // int64_t *arg_types, int32_t num_teams, int32_t thread_limit, void* htask);
     llvm::Type *TypeParams[] = {CGM.Int64Ty,
                                 CGM.VoidPtrTy,
                                 CGM.Int32Ty,
@@ -2273,7 +2273,8 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
                                 CGM.SizeTy->getPointerTo(),
                                 CGM.Int64Ty->getPointerTo(),
                                 CGM.Int32Ty,
-                                CGM.Int32Ty};
+                                CGM.Int32Ty,
+    				CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_teams");
@@ -2300,7 +2301,7 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
   case OMPRTL__tgt_target_teams_nowait: {
     // Build int32_t __tgt_target_teams_nowait(int64_t device_id, void
     // *host_ptr, int32_t arg_num, void** args_base, void **args, size_t
-    // *arg_sizes, int64_t *arg_types, int32_t num_teams, int32_t thread_limit);
+    // *arg_sizes, int64_t *arg_types, int32_t num_teams, int32_t thread_limit, void* htask);
     llvm::Type *TypeParams[] = {CGM.Int64Ty,
                                 CGM.VoidPtrTy,
                                 CGM.Int32Ty,
@@ -2309,7 +2310,8 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
                                 CGM.SizeTy->getPointerTo(),
                                 CGM.Int64Ty->getPointerTo(),
                                 CGM.Int32Ty,
-                                CGM.Int32Ty};
+                                CGM.Int32Ty,
+    				CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_teams_nowait");
@@ -7749,27 +7751,9 @@ void CGOpenMPRuntime::emitTargetCall(
     // of having any clauses associated. If the user is using teams but no
     // clauses, these two values will be the default that should be passed to
     // the runtime library - a 32-bit integer with the value zero.
-
-    if (NumTeams) {
-      assert(ThreadLimit && "Thread limit expression should be available along "
-                            "with number of teams.");
-      llvm::Value *OffloadingArgs[] = {
-          DeviceID,           OutlinedFnID,
-          PointerNum,         Info.BasePointersArray,
-          Info.PointersArray, Info.SizesArray,
-          Info.MapTypesArray, NumTeams,
-          ThreadLimit};
-      if (hasNowait)
-        Return = CGF.EmitRuntimeCall(
-            RT.createRuntimeFunction(OMPRTL__tgt_target_teams_nowait),
-            OffloadingArgs);
-      else
-        Return = CGF.EmitRuntimeCall(
-            RT.createRuntimeFunction(OMPRTL__tgt_target_teams), OffloadingArgs);
-    } else {
-
-    llvm::Value *tmp;
-    printf("emitTargetCall dumping:\n");
+    llvm::Value *tmp = llvm::ConstantPointerNull::get(llvm::PointerType::get(CGF.Builder.getInt8Ty(),0));
+//    llvm::Value *tmp = llvm::Constant::getNullValue(llvm::Type::getInt8ty(llvm));
+    printf("emitTargetCall dumping Func name: %s\n", CGF.CurFn->getName());
     for(llvm::Argument &A : CGF.CurFn->args()){
 	    printf("Argument name: %s\n", A.getName());
 //	    printf("Argument type: "); A.getType()->dump(); printf("\n");
@@ -7783,10 +7767,29 @@ void CGOpenMPRuntime::emitTargetCall(
     printf("Dump OutlinedFnID name: %s\n", OutlinedFnID->getName());
     OutlinedFnID->getType()->dump();
     OutlinedFnID->dump();
-    printf("Dump tmp %s\n", tmp->getName());
-    tmp->dump();
+//    printf("Dump tmp %s\n", tmp->getName());
+//    tmp->dump();
 
+     printf("Creating OffloadingArgs\n");
 
+    if (NumTeams) {
+      assert(ThreadLimit && "Thread limit expression should be available along "
+                            "with number of teams.");
+      llvm::Value *OffloadingArgs[] = {
+          DeviceID,           OutlinedFnID,
+          PointerNum,         Info.BasePointersArray,
+          Info.PointersArray, Info.SizesArray,
+          Info.MapTypesArray, NumTeams,
+          ThreadLimit, tmp};
+      if (hasNowait)
+        Return = CGF.EmitRuntimeCall(
+            RT.createRuntimeFunction(OMPRTL__tgt_target_teams_nowait),
+            OffloadingArgs);
+      else
+        Return = CGF.EmitRuntimeCall(
+            RT.createRuntimeFunction(OMPRTL__tgt_target_teams), OffloadingArgs);
+    } else {
+    
 
       llvm::Value *OffloadingArgs[] = {
           DeviceID,           OutlinedFnID,
@@ -7803,7 +7806,7 @@ void CGOpenMPRuntime::emitTargetCall(
     }
 
     
-
+    printf("Before CurFn->dump()\n");
     CGF.CurFn->dump();
 
     // Check the error code and execute the host version if required.
