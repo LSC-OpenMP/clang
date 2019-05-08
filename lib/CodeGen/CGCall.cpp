@@ -3459,8 +3459,10 @@ llvm::CallInst *
 CodeGenFunction::EmitRuntimeCall(llvm::Value *callee,
                                  ArrayRef<llvm::Value*> args,
                                  const llvm::Twine &name) {
+  printf("\n\nentering CodeGenFunction::EmitRuntimeCall\n\n");
   SmallVector<llvm::OperandBundleDef, 1> BundleList;
   getBundlesForFunclet(callee, CurrentFuncletPad, BundleList);
+  printf("\n\nDEGUB CodeGenFunction::EmitRuntimeCall\n\n");
   llvm::CallInst *call = Builder.CreateCall(callee, args, BundleList, name);
   call->setCallingConv(getRuntimeCC());
   return call;

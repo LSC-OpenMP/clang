@@ -1460,39 +1460,6 @@ public:
   virtual void emitFlush(CodeGenFunction &CGF, ArrayRef<const Expr *> Vars,
                          SourceLocation Loc);
 
-  /// \brief Emit task region for the task directive. The task region is
-  /// emitted in several steps:
-  /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
-  /// gtid, kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-  /// kmp_routine_entry_t *task_entry). Here task_entry is a pointer to the
-  /// function:
-  /// kmp_int32 .omp_task_entry.(kmp_int32 gtid, kmp_task_t *tt) {
-  ///   TaskFunction(gtid, tt->part_id, tt->shareds);
-  ///   return 0;
-  /// }
-  /// 2. Copy a list of shared variables to field shareds of the resulting
-  /// structure kmp_task_t returned by the previous call (if any).
-  /// 3. Copy a pointer to destructions function to field destructions of the
-  /// resulting structure kmp_task_t.
-  /// 4. Emit a call to kmp_int32 __kmpc_omp_task(ident_t *, kmp_int32 gtid,
-  /// kmp_task_t *new_task), where new_task is a resulting structure from
-  /// previous items.
-  /// \param D Current task directive.
-  /// \param TaskFunction An LLVM function with type void (*)(i32 /*gtid*/, i32
-  /// /*part_id*/, captured_struct */*__context*/);
-  /// \param SharedsTy A type which contains references the shared variables.
-  /// \param Shareds Context with the list of shared variables from the \p
-  /// TaskFunction.
-  /// \param IfCond Not a nullptr if 'if' clause was specified, nullptr
-  /// otherwise.
-  /// \param Data Additional data for task generation like tiednsee, final
-  /// state, list of privates etc.
-  virtual void emitTaskCall(CodeGenFunction &CGF, SourceLocation Loc,
-                            const OMPExecutableDirective &D,
-                            llvm::Value *TaskFunction, QualType SharedsTy,
-                            Address Shareds, const Expr *IfCond,
-                            const OMPTaskDataTy &Data);
-
   /// Emit task region for the taskloop directive. The taskloop region is
   /// emitted in several steps:
   /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
@@ -1860,7 +1827,41 @@ public:
   TaskResultTy emitTaskInit(CodeGenFunction &CGF, SourceLocation Loc,
                             const OMPExecutableDirective &D,
                             llvm::Value *TaskFunction, QualType SharedsTy,
-                            Address Shareds, const OMPTaskDataTy &Data);
+                            Address Shareds, const OMPTaskDataTy &Data, TargetDataInfo Info = TargetDataInfo());
+
+
+  /// \brief Emit task region for the task directive. The task region is
+  /// emitted in several steps:
+  /// 1. Emit a call to kmp_task_t *__kmpc_omp_task_alloc(ident_t *, kmp_int32
+  /// gtid, kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
+  /// kmp_routine_entry_t *task_entry). Here task_entry is a pointer to the
+  /// function:
+  /// kmp_int32 .omp_task_entry.(kmp_int32 gtid, kmp_task_t *tt) {
+  ///   TaskFunction(gtid, tt->part_id, tt->shareds);
+  ///   return 0;
+  /// }
+  /// 2. Copy a list of shared variables to field shareds of the resulting
+  /// structure kmp_task_t returned by the previous call (if any).
+  /// 3. Copy a pointer to destructions function to field destructions of the
+  /// resulting structure kmp_task_t.
+  /// 4. Emit a call to kmp_int32 __kmpc_omp_task(ident_t *, kmp_int32 gtid,
+  /// kmp_task_t *new_task), where new_task is a resulting structure from
+  /// previous items.
+  /// \param D Current task directive.
+  /// \param TaskFunction An LLVM function with type void (*)(i32 /*gtid*/, i32
+  /// /*part_id*/, captured_struct */*__context*/);
+  /// \param SharedsTy A type which contains references the shared variables.
+  /// \param Shareds Context with the list of shared variables from the \p
+  /// TaskFunction.
+  /// \param IfCond Not a nullptr if 'if' clause was specified, nullptr
+  /// otherwise.
+  /// \param Data Additional data for task generation like tiednsee, final
+  /// state, list of privates etc.
+  virtual void emitTaskCall(CodeGenFunction &CGF, SourceLocation Loc,
+                            const OMPExecutableDirective &D,
+                            llvm::Value *TaskFunction, QualType SharedsTy,
+                            Address Shareds, const Expr *IfCond,
+                            const OMPTaskDataTy &Data, TargetDataInfo Info = TargetDataInfo());
 
   /// Generate arrays for later emission of code to implement target map clause
   OMPMapArrays generateMapArrays(CodeGenFunction &CGF,

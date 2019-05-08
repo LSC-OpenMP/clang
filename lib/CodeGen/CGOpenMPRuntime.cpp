@@ -814,7 +814,8 @@ enum OpenMPRTLFunction {
   // Call to kmp_task_t * __kmpc_omp_target_task_alloc(ident_t *, kmp_int32
   // gtid,
   // kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-  // kmp_routine_entry_t *task_entry, int64_t device_id);
+  // kmp_routine_entry_t *task_entry, int64_t device_id,  int32_t arg_num
+  // void** args_base, void **args, size_t *arg_sizes, int64_t *arg_types);
   OMPRTL__kmpc_tgt_target_task_alloc,
   // Call to void __tgt_check_compara_variable(void *host_ptr, void* tgt_ptr,
   // size_t size);
@@ -2255,7 +2256,7 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
                                 CGM.VoidPtrPtrTy,
                                 CGM.SizeTy->getPointerTo(),
                                 CGM.Int64Ty->getPointerTo(),
-    				CGM.VoidPtrTy};
+    				                    CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target");
@@ -2274,7 +2275,7 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
                                 CGM.Int64Ty->getPointerTo(),
                                 CGM.Int32Ty,
                                 CGM.Int32Ty,
-    				CGM.VoidPtrTy};
+    				                    CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_teams");
@@ -2292,7 +2293,7 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
                                 CGM.VoidPtrPtrTy,
                                 CGM.SizeTy->getPointerTo(),
                                 CGM.Int64Ty->getPointerTo(),
-    				CGM.VoidPtrTy};
+    				                    CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_nowait");
@@ -2311,7 +2312,7 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
                                 CGM.Int64Ty->getPointerTo(),
                                 CGM.Int32Ty,
                                 CGM.Int32Ty,
-    				CGM.VoidPtrTy};
+    				                    CGM.VoidPtrTy};
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.Int32Ty, TypeParams, /*isVarArg*/ false);
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_target_teams_nowait");
@@ -2563,12 +2564,20 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
   case OMPRTL__kmpc_tgt_target_task_alloc: {
     // Build kmp_task_t *__kmpc_omp_target_task_alloc(ident_t *, kmp_int32 gtid,
     // kmp_int32 flags, size_t sizeof_kmp_task_t, size_t sizeof_shareds,
-    // kmp_routine_entry_t *task_entry, int64_t device_id);
+    // kmp_routine_entry_t *task_entry, int64_t device_id,  int32_t arg_num,
+    // void** args_base, void **args, size_t *arg_sizes, int64_t *arg_types);
+
     assert(KmpRoutineEntryPtrTy != nullptr &&
            "Type kmp_routine_entry_t must be created.");
     llvm::Type *TypeParams[] = {
         getIdentTyPointerTy(), CGM.Int32Ty, CGM.Int32Ty, CGM.SizeTy, CGM.SizeTy,
-        KmpRoutineEntryPtrTy,  CGM.Int64Ty};
+        KmpRoutineEntryPtrTy,  CGM.Int64Ty ,
+                                CGM.Int32Ty,
+                                CGM.VoidPtrPtrTy,
+                                CGM.VoidPtrPtrTy,
+                                CGM.SizeTy->getPointerTo(),
+                                CGM.Int64Ty->getPointerTo()
+};
     // Return void * and then cast to particular kmp_task_t type.
     llvm::FunctionType *FnTy =
         llvm::FunctionType::get(CGM.VoidPtrTy, TypeParams, /*isVarArg=*/false);
@@ -5181,7 +5190,7 @@ checkDestructorsRequired(const RecordDecl *KmpTaskTWithPrivatesQTyRD) {
 CGOpenMPRuntime::TaskResultTy CGOpenMPRuntime::emitTaskInit(
     CodeGenFunction &CGF, SourceLocation Loc, const OMPExecutableDirective &D,
     llvm::Value *TaskFunction, QualType SharedsTy, Address Shareds,
-    const OMPTaskDataTy &Data) {
+    const OMPTaskDataTy &Data, TargetDataInfo Info) {
   printf("emitTaskInit\n");
   auto &C = CGM.getContext();
   llvm::SmallVector<PrivateDataTy, 4> Privates;
@@ -5360,6 +5369,7 @@ CGOpenMPRuntime::TaskResultTy CGOpenMPRuntime::emitTaskInit(
   TaskFlags = CGF.Builder.CreateOr(TaskFlags, CGF.Builder.getInt32(Flags));
   auto *SharedsSize = CGM.getSize(C.getTypeSizeInChars(SharedsTy));
   llvm::CallInst *NewTask;
+  llvm::Value *PointerNum = CGF.Builder.getInt32(Info.NumberOfPtrs);
   if (Data.DeviceId) {
     llvm::Value *AllocArgs[] = {emitUpdateLocation(CGF, Loc),
                                 getThreadID(CGF, Loc),
@@ -5368,7 +5378,12 @@ CGOpenMPRuntime::TaskResultTy CGOpenMPRuntime::emitTaskInit(
                                 SharedsSize,
                                 CGF.Builder.CreatePointerBitCastOrAddrSpaceCast(
                                     TaskEntry, KmpRoutineEntryPtrTy),
-                                Data.DeviceId};
+                                Data.DeviceId,
+                                PointerNum,
+                                Info.BasePointersArray,
+                                Info.PointersArray,
+                                Info.SizesArray,
+                                Info.MapTypesArray};
     NewTask = CGF.EmitRuntimeCall(
         createRuntimeFunction(OMPRTL__kmpc_tgt_target_task_alloc), AllocArgs);
   } else {
@@ -7484,13 +7499,13 @@ static Address emitDependences(CodeGenFunction &CGF,
 void CGOpenMPRuntime::emitTaskCall(
     CodeGenFunction &CGF, SourceLocation Loc, const OMPExecutableDirective &D,
     llvm::Value *TaskFunction, QualType SharedsTy, Address Shareds,
-    const Expr *IfCond, const OMPTaskDataTy &Data) {
+    const Expr *IfCond, const OMPTaskDataTy &Data, TargetDataInfo Info) {
   printf("emitTaskCall\n");
   if (!CGF.HaveInsertPoint())
     return;
 
   TaskResultTy Result = emitTaskInit(CGF, Loc, D, TaskFunction, SharedsTy,
-                                     Shareds, Data);
+                                     Shareds, Data, Info);
   llvm::Value *NewTask = Result.NewTask;
   llvm::Value *TaskEntry = Result.TaskEntry;
   llvm::Value *NewTaskNewTaskTTy = Result.NewTaskNewTaskTTy;
@@ -7598,8 +7613,8 @@ void CGOpenMPRuntime::emitTaskCall(
 void CGOpenMPRuntime::emitTargetCall(
     CodeGenFunction &CGF, const OMPExecutableDirective &D,
     llvm::Value *OutlinedFn, llvm::Value *OutlinedFnID, const Expr *IfCond,
-    const Expr *Device, ArrayRef<llvm::Value *> CapturedVars,
-    OMPMapArrays &MapArrays) {
+    const Expr *Device, ArrayRef<llvm::Value *> CapturedVars, OMPMapArrays &MapArrays) {
+  
   printf("emitTargetCall func: %s\n", CGF.CurFn->getName());
   if (!CGF.HaveInsertPoint())
     return;
@@ -7660,6 +7675,7 @@ void CGOpenMPRuntime::emitTargetCall(
   auto &&ThenGen = [this, Device, OutlinedFn, OutlinedFnID, &D, hasNowait,
                     &MapArrays, HasDepend, &Data,
                     &Info](CodeGenFunction &CGF, PrePostActionTy &) {
+    printf("\n\n DEBUG INSIDE ThenGen\n\n");
     auto &RT = CGF.CGM.getOpenMPRuntime();
 
     // Emit the offloading arrays.
@@ -7715,7 +7731,6 @@ void CGOpenMPRuntime::emitTargetCall(
           /*Idx0=*/0,
           /*Idx1=*/0);
     }
-
     // On top of the arrays that were filled up, the target offloading call
     // takes as arguments the device id as well as the host pointer. The host
     // pointer is used by the runtime library to identify the current target
@@ -7773,6 +7788,7 @@ void CGOpenMPRuntime::emitTargetCall(
      printf("Creating OffloadingArgs\n");
 
     if (NumTeams) {
+      printf("\n\n DEBUG Numteams Set\n\n");
       assert(ThreadLimit && "Thread limit expression should be available along "
                             "with number of teams.");
       llvm::Value *OffloadingArgs[] = {
@@ -7780,7 +7796,7 @@ void CGOpenMPRuntime::emitTargetCall(
           PointerNum,         Info.BasePointersArray,
           Info.PointersArray, Info.SizesArray,
           Info.MapTypesArray, NumTeams,
-          ThreadLimit, tmp};
+          ThreadLimit,        tmp};
       if (hasNowait)
         Return = CGF.EmitRuntimeCall(
             RT.createRuntimeFunction(OMPRTL__tgt_target_teams_nowait),
@@ -7789,7 +7805,7 @@ void CGOpenMPRuntime::emitTargetCall(
         Return = CGF.EmitRuntimeCall(
             RT.createRuntimeFunction(OMPRTL__tgt_target_teams), OffloadingArgs);
     } else {
-    
+          printf("\n\n DEBUG Numteams Not Set\n\n");
 
       llvm::Value *OffloadingArgs[] = {
           DeviceID,           OutlinedFnID,
@@ -7804,11 +7820,10 @@ void CGOpenMPRuntime::emitTargetCall(
         Return = CGF.EmitRuntimeCall(
             RT.createRuntimeFunction(OMPRTL__tgt_target), OffloadingArgs);
     }
-
     
     printf("Before CurFn->dump()\n");
-    CGF.CurFn->dump();
 
+    CGF.CurFn->dump();
     // Check the error code and execute the host version if required.
     llvm::BasicBlock *OffloadFailedBlock =
         CGF.createBasicBlock("omp_offload.failed");
@@ -7831,6 +7846,7 @@ void CGOpenMPRuntime::emitTargetCall(
     CGF.EmitBranch(OffloadContBlock);
     CGF.EmitBlock(OffloadContBlock, /*IsFinished=*/true);
   };
+  printf("\n\n DEBUG AFTER ThenGen\n\n");
 
   // Notify that the host version must be executed.
   auto &&ElseGen = [this, &D, OutlinedFn, &MapArrays,
@@ -7848,7 +7864,7 @@ void CGOpenMPRuntime::emitTargetCall(
     emitOutlinedFunctionCall(CGF, D.getLocStart(), OutlinedFn,
                              MapArrays.KernelArgs);
   };
-
+  printf("\n\n DEBUG AFTER LAMBDA \n\n");
   // If we have a target function ID it means that we need to support
   // offloading, otherwise, just execute on the host. We need to execute on host
   // regardless of the conditional in the if clause if, e.g., the user do not
@@ -7871,12 +7887,12 @@ void CGOpenMPRuntime::emitTargetCall(
   Address CapturedStruct = CGF.GenerateCapturedStmtArgument(*CS);
   QualType SharedsTy =
       CGF.getContext().getRecordType(CS->getCapturedRecordDecl());
-  auto &&TaskGen = [&D, SharedsTy, CapturedStruct](CodeGenFunction &CGF,
+  auto &&TaskGen = [&D, SharedsTy, CapturedStruct, Info](CodeGenFunction &CGF,
                                                    llvm::Value *OutlinedFn,
                                                    const OMPTaskDataTy &Data) {
     CGF.CGM.getOpenMPRuntime().emitTaskCall(CGF, D.getLocStart(), D, OutlinedFn,
                                             SharedsTy, CapturedStruct,
-                                            /*IfCond=*/nullptr, Data);
+                                            /*IfCond=*/nullptr, Data, Info);
   };
 
   auto &&TaskThenGen = [this, &D, &ThenGen, &TaskGen, hasNowait,
@@ -7905,13 +7921,18 @@ void CGOpenMPRuntime::emitTargetCall(
       emitTaskwaitCall(CGF, D.getLocStart());
   };
   if (OutlinedFnID) {
-    if (IfCond)
+    printf("DEBUG OutlindedFnID\n");
+    if (IfCond){
+      printf("DEBUG IfCond\n");
       emitOMPIfClause(CGF, IfCond, TaskThenGen, TaskElseGen);
+    }
     else {
+      printf("DEBUG else\n");
       RegionCodeGenTy ThenRCG(TaskThenGen);
       ThenRCG(CGF);
     }
   } else {
+    printf("DEBUG else OutlinedFnID\n");
     RegionCodeGenTy ElseRCG(TaskElseGen);
     ElseRCG(CGF);
   }
@@ -8007,7 +8028,7 @@ uint64_t MappableExprsHandler::getMapTypeBits(
   case OMPC_MAP_from:
     Bits = OMP_MAP_FROM;
     break;
-  case OMPC_MAP_tofrom:
+    case OMPC_MAP_tofrom:
     Bits = OMP_MAP_TO | OMP_MAP_FROM;
     break;
   case OMPC_MAP_delete:

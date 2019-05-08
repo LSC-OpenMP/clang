@@ -4392,7 +4392,7 @@ void CodeGenFunction::EmitOMPTargetDirective(const OMPTargetDirective &S) {
                                      HasDepend);
   };
   CGM.getOpenMPRuntime().emitInlinedDirective(*this, OMPD_target, ArgGen);
-  printf("EmitOMPTargetDirective calling emitCommonOMPTargtDirective\n");
+  printf("EmitOMPTargetDirective calling emitCommonOMPTargtDirective %d\n", MapArrays.BasePointers.size());
   emitCommonOMPTargetDirective(*this, S, OMPD_target, CodeGen, CapturedVars,
                                MapArrays);
 }
