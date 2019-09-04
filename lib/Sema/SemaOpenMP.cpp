@@ -7470,7 +7470,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprClause(OpenMPClauseKind Kind, Expr *Expr,
   case OMPC_if:
   case OMPC_default:
   case OMPC_use:
-  case OMPC_module:
+  case OMPC_implements:
   case OMPC_proc_bind:
   case OMPC_schedule:
   case OMPC_private:
@@ -7521,8 +7521,8 @@ OMPClause *Sema::ActOnOpenMPAccClause(OpenMPClauseKind Kind,
                                       SourceLocation EndLoc) {
   OMPClause *Res = nullptr;
   switch (Kind) {
-  case OMPC_module:
-    Res = ActOnOpenMPModuleClause(Info, StartLoc, LParenLoc, EndLoc);
+  case OMPC_implements:
+    Res = ActOnOpenMPImplementsClause(Info, StartLoc, LParenLoc, EndLoc);
     break;
   default:
     llvm_unreachable("Clause is not allowed.");
@@ -7821,7 +7821,7 @@ OMPClause *Sema::ActOnOpenMPSimpleClause(
         static_cast<OpenMPProcBindClauseKind>(Argument), ArgumentLoc, StartLoc,
         LParenLoc, EndLoc);
     break;
-  case OMPC_module:
+  case OMPC_implements:
   case OMPC_if:
   case OMPC_final:
   case OMPC_num_threads:
@@ -8035,7 +8035,6 @@ OMPClause *Sema::ActOnOpenMPSingleExprWithArgClause(
         StartLoc, LParenLoc, ArgumentLoc[Modifier], ArgumentLoc[DefaultmapKind],
         EndLoc);
     break;
-  case OMPC_module:
   case OMPC_final:
   case OMPC_num_threads:
   case OMPC_safelen:
@@ -8072,6 +8071,7 @@ OMPClause *Sema::ActOnOpenMPSingleExprWithArgClause(
   case OMPC_seq_cst:
   case OMPC_depend:
   case OMPC_device:
+  case OMPC_implements:
   case OMPC_threads:
   case OMPC_simd:
   case OMPC_map:
@@ -8259,7 +8259,6 @@ OMPClause *Sema::ActOnOpenMPClause(OpenMPClauseKind Kind,
   case OMPC_lastprivate:
   case OMPC_shared:
   case OMPC_reduction:
-  case OMPC_module:
   case OMPC_linear:
   case OMPC_aligned:
   case OMPC_copyin:
@@ -8272,6 +8271,7 @@ OMPClause *Sema::ActOnOpenMPClause(OpenMPClauseKind Kind,
   case OMPC_lastprivate_update:
   case OMPC_depend:
   case OMPC_device:
+  case OMPC_implements:
   case OMPC_map:
   case OMPC_num_teams:
   case OMPC_thread_limit:
@@ -8430,7 +8430,6 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
         ActOnOpenMPInReductionClause(VarList, StartLoc, LParenLoc, ColonLoc,
                                      EndLoc, ReductionIdScopeSpec, ReductionId);
     break;
-  case OMPC_module:
   case OMPC_if:
   case OMPC_final:
   case OMPC_num_threads:
@@ -8452,6 +8451,7 @@ OMPClause *Sema::ActOnOpenMPVarListClause(
   case OMPC_capture:
   case OMPC_seq_cst:
   case OMPC_device:
+  case OMPC_implements:
   case OMPC_threads:
   case OMPC_simd:
   case OMPC_num_teams:
@@ -10054,7 +10054,7 @@ OMPClause *Sema::ActOnOpenMPReductionClause(
       buildPostUpdate(*this, ExprPostUpdates));
 }
 
-OMPClause *Sema::ActOnOpenMPModuleClause(llvm::StringRef NameInfo,
+OMPClause *Sema::ActOnOpenMPImplementsClause(llvm::StringRef NameInfo,
                                          SourceLocation StartLoc,
                                          SourceLocation LParenLoc,
                                          SourceLocation EndLoc) {
@@ -10062,8 +10062,9 @@ OMPClause *Sema::ActOnOpenMPModuleClause(llvm::StringRef NameInfo,
   // DSAStackTy::DSAVarData DVar = DSAStack->getTopDSA(D, false);
 
   return new (Context)
-      OMPModuleClause(StartLoc, LParenLoc, EndLoc, NameInfo);
+      OMPImplementsClause(StartLoc, LParenLoc, EndLoc, NameInfo);
 }
+
 
 bool Sema::CheckOpenMPLinearModifier(OpenMPLinearClauseKind LinKind,
                                      SourceLocation LinLoc) {

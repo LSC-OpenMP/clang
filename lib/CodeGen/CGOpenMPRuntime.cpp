@@ -31,6 +31,8 @@
 #include "llvm/Support/raw_ostream.h"
 #include <cassert>
 
+#include <iostream>
+
 using namespace clang;
 using namespace CodeGen;
 
@@ -812,6 +814,8 @@ enum OpenMPRTLFunction {
   // Call to void __tgt_check_compara_variable(void *host_ptr, void* tgt_ptr,
   // size_t size);
   OMPRTL__tgt_check_compare_variable,
+  OMPRTL__tgt_set_implements,
+  OMPRTL__tgt_set_check,
 };
 
 /// A basic class for pre|post-action for advanced codegen sequence for OpenMP
@@ -2561,6 +2565,22 @@ CGOpenMPRuntime::createRuntimeFunction(unsigned Function) {
     RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_check_compare_variable");
     break;
   }
+  case OMPRTL__tgt_set_implements: {
+    // Build void __tgt_set_implements(char *data);
+    llvm::Type *TypeParams[] = {CGM.Int8PtrTy};
+    llvm::FunctionType *FnTy =
+        llvm::FunctionType::get(CGM.VoidTy, TypeParams, /*isVarArg*/ false);
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_set_implements");
+    break;
+  }
+  case OMPRTL__tgt_set_check: {
+    // Build void __tgt_set_implements(char *data);
+    llvm::Type *TypeParams[] = {CGM.Int32Ty};
+    llvm::FunctionType *FnTy =
+        llvm::FunctionType::get(CGM.VoidTy, TypeParams, /*isVarArg*/ false);
+    RTLFn = CGM.CreateRuntimeFunction(FnTy, "__tgt_set_check");
+    break;
+  }
   }
   assert(RTLFn && "Unable to find OpenMP runtime function");
   return RTLFn;
@@ -4085,6 +4105,8 @@ void CGOpenMPRuntime::createOffloadConfiguration() {
     sub_target_id = 9006;
   } else if (Triple == "awsf1") {
     sub_target_id = 9007;
+  } else if (Triple == "alveo") {
+    sub_target_id = 9008;
   } else {
     return;
   }
@@ -4121,33 +4143,6 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
   Str->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
   llvm::Constant *StrPtr = llvm::ConstantExpr::getBitCast(Str, CGM.Int8PtrTy);
 
-  // Create constant string with the module.
-  std::string str_module;
-
-  if (!this->TgtFPGAModule.empty()) {
-    str_module = this->TgtFPGAModule.front();
-    this->TgtFPGAModule.pop();
-  }
-
-  llvm::Constant *StrPtrModuleInit =
-      llvm::ConstantDataArray::getString(C, str_module);
-
-  llvm::GlobalVariable *StrModule =
-      new llvm::GlobalVariable(M, StrPtrModuleInit->getType(), /*isConstant=*/true,
-                               llvm::GlobalValue::InternalLinkage, StrPtrModuleInit,
-                               ".omp_offloading.entry_module");
-  StrModule->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
-  llvm::Constant *StrModulePtr =
-      llvm::ConstantExpr::getBitCast(StrModule, CGM.Int8PtrTy);
-
-  // Create int32_t check flags.
-  int32_t CheckFlags = 0;
-
-  if (!this->TgtCheckFlags.empty()) {
-    CheckFlags = this->TgtCheckFlags.front();
-    this->TgtCheckFlags.pop();
-  }
-
   // Decide linkage type of the entry struct by looking at the linkage type of
   // the variable. By default the linkage is Link-Once.
   auto EntryLinkage = llvm::GlobalValue::WeakAnyLinkage;
@@ -4161,9 +4156,7 @@ void CGOpenMPRuntime::createOffloadEntry(llvm::Constant *ID,
   auto EntryInit = EntryBuilder.beginStruct(TgtOffloadEntryType);
   EntryInit.add(AddrPtr);
   EntryInit.add(StrPtr);
-  EntryInit.add(StrModulePtr);
   EntryInit.addInt(CGM.SizeTy, Size);
-  EntryInit.addInt(CGM.Int32Ty, CheckFlags);
   EntryInit.addInt(CGM.Int32Ty, Flags);
   EntryInit.addInt(CGM.Int32Ty, 0);
   SmallString<128> EntryGblName(".omp_offloading.entry.");
@@ -4431,9 +4424,7 @@ QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
   //   void      *addr;       // Pointer to the offload entry info.
   //                          // (function or global)
   //   char      *name;       // Name of the function or global.
-  //   char      *module;     // Name of the module to offloading if is an FPGA.
   //   size_t     size;       // Size of the entry info (0 if it a function).
-  //   int32_t    check;      // Flags associated with check feature.
   //   int32_t    flags;      // Flags associated with the entry, e.g. 'link'.
   //   int32_t    reserved;   // Reserved, to use by the runtime library.
   // };
@@ -4443,10 +4434,7 @@ QualType CGOpenMPRuntime::getTgtOffloadEntryQTy() {
     RD->startDefinition();
     addFieldToRecordDecl(C, RD, C.VoidPtrTy);
     addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
-    addFieldToRecordDecl(C, RD, C.getPointerType(C.CharTy));
     addFieldToRecordDecl(C, RD, C.getSizeType());
-    addFieldToRecordDecl(
-        C, RD, C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/true));
     addFieldToRecordDecl(
         C, RD, C.getIntTypeForBitwidth(/*DestWidth=*/32, /*Signed=*/true));
     addFieldToRecordDecl(
@@ -7503,7 +7491,9 @@ void CGOpenMPRuntime::emitTargetCall(
     CodeGenFunction &CGF, const OMPExecutableDirective &D,
     llvm::Value *OutlinedFn, llvm::Value *OutlinedFnID, const Expr *IfCond,
     const Expr *Device, ArrayRef<llvm::Value *> CapturedVars,
-    OMPMapArrays &MapArrays, const OMPTaskDataTy &Data) {
+    OMPMapArrays &MapArrays, const OMPTaskDataTy &Data,
+    const std::string implementsName) {
+
   if (!CGF.HaveInsertPoint())
     return;
 
@@ -7529,7 +7519,7 @@ void CGOpenMPRuntime::emitTargetCall(
   // Fill up the pointer arrays and transfer execution to the device.
   auto &&ThenGen = [this, &Ctx, Device, OutlinedFnID, OffloadError,
                     OffloadErrorQType, &D, hasNowait, &MapArrays, hasDepend,
-                    &Data](CodeGenFunction &CGF, PrePostActionTy &) {
+                    &Data, implementsName](CodeGenFunction &CGF, PrePostActionTy &) {
     auto &RT = CGF.CGM.getOpenMPRuntime();
 
     if (CGF.getLangOpts().OpenMPImplicitMapLambdas)
@@ -7615,6 +7605,16 @@ void CGOpenMPRuntime::emitTargetCall(
 
     auto *NumTeams = emitNumTeamsClauseForTargetDirective(RT, CGF, D);
     auto *ThreadLimit = emitThreadLimitClauseForTargetDirective(RT, CGF, D);
+
+    if (!implementsName.empty()) {
+      llvm::Value *implementsValue;
+
+      implementsValue = CGF.Builder.CreateGlobalStringPtr(implementsName.c_str());
+
+      auto args = {implementsValue};
+
+      CGF.EmitRuntimeCall(RT.createRuntimeFunction(OMPRTL__tgt_set_implements), args);
+    }
 
     // If we have NumTeams defined this means that we have an enclosed teams
     // region. Therefore we also expect to have ThreadLimit defined. These two
@@ -9806,30 +9806,3 @@ Address CGOpenMPRuntime::getParameterAddress(CodeGenFunction &CGF,
   return CGF.GetAddrOfLocalVar(NativeParam);
 }
 
-void CGOpenMPRuntime::createFPGAInfo(const OMPExecutableDirective &S) {
-
-  // check if is an FPGA device
-  auto &Triple = CGM.getTarget().getTargetOpts().Triple;
-  if ((Triple != "smartnic") && (Triple != "harp") && (Triple != "harpsim") &&
-      (Triple != "awsf1") ) {
-    return;
-  }
-
-  const OMPUseClause *c_use = S.getSingleClause<OMPUseClause>();
-  if (c_use) {
-    if (c_use->getUseKind() == OMPC_USE_hrw) {
-      const OMPModuleClause *c_module = S.getSingleClause<OMPModuleClause>();
-
-      if (c_module) {
-        this->TgtFPGAModule.push(c_module->getModuleNameInfo());
-      }
-    }
-  }
-
-  const OMPCheckClause *c_check = S.getSingleClause<OMPCheckClause>();
-  if (c_check) {
-    this->TgtCheckFlags.push(1);
-  } else {
-    this->TgtCheckFlags.push(0);
-  }
-}

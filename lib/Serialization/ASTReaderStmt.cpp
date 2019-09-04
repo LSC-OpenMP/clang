@@ -1775,8 +1775,8 @@ OMPClause *OMPClauseReader::readClause() {
   case OMPC_use:
     C = new (Context) OMPUseClause();
     break;
-  case OMPC_module:
-    C = new (Context) OMPModuleClause();
+  case OMPC_implements:
+    C = new (Context) OMPImplementsClause();
     break;
   case OMPC_proc_bind:
     C = new (Context) OMPProcBindClause();
@@ -1964,8 +1964,8 @@ void OMPClauseReader::VisitOMPIfClause(OMPIfClause *C) {
   C->setLParenLoc(Reader->ReadSourceLocation());
 }
 
-void OMPClauseReader::VisitOMPModuleClause(OMPModuleClause *C) {
-  C->setModuleNameInfo(Reader->ReadString());
+void OMPClauseReader::VisitOMPImplementsClause(OMPImplementsClause *C) {
+  C->setImplementsNameInfo(Reader->ReadString());
   C->setLParenLoc(Reader->ReadSourceLocation());
 }
 

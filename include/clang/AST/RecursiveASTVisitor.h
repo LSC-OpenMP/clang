@@ -2763,7 +2763,7 @@ bool RecursiveASTVisitor<Derived>::VisitOMPUseClause(OMPUseClause *) {
 }
 
 template <typename Derived>
-bool RecursiveASTVisitor<Derived>::VisitOMPModuleClause(OMPModuleClause *) {
+bool RecursiveASTVisitor<Derived>::VisitOMPImplementsClause(OMPImplementsClause *) {
   return true;
 }
 

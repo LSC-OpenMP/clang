@@ -626,9 +626,9 @@ private:
   ///   void      *addr;       // Pointer to the offload entry info.
   ///                          // (function or global)
   ///   char      *name;       // Name of the function or global.
-  ///   char      *module;     // Name of the module to offloading if is an FPGA.
   ///   size_t     size;       // Size of the entry info (0 if it a function).
-  //    int32_t    check;      // Flags associated with check feature.
+  ///   int32_t    flags;      // Flags associated with the entry, e.g. 'link'.
+  ///   int32_t    reserved;   // Reserved, to use by the runtime library.
   /// };
   QualType TgtOffloadEntryQTy;
   /// struct __tgt_device_image{
@@ -652,10 +652,6 @@ private:
   ///                                         // entries (non inclusive).
   /// };
   QualType TgtBinaryDescriptorQTy;
-  /// \brief Target FPGA Module name
-  std::queue<std::string> TgtFPGAModule;
-  /// \brief Target Check Flags int32_t
-  std::queue<int32_t> TgtCheckFlags;
   /// \brief Entity that registers the offloading constants that were emitted so
   /// far.
   class OffloadEntriesInfoManagerTy {
@@ -1023,9 +1019,6 @@ public:
 
   /// The function is added tracked functions list.
   virtual void addTrackedFunction(StringRef MangledName, GlobalDecl GD);
-
-  /// \brief Create the FPGA offloading info for the current context.
-  virtual void createFPGAInfo(const OMPExecutableDirective &S);
 
   /// The function register all tracked functions if they have
   /// OMPDeclareTargetDeclAttr
@@ -1696,7 +1689,7 @@ public:
                  llvm::Value *OutlinedFn, llvm::Value *OutlinedFnID,
                  const Expr *IfCond, const Expr *Device,
                  ArrayRef<llvm::Value *> CapturedVars, OMPMapArrays &MapArrays,
-                 const OMPTaskDataTy &Data);
+                 const OMPTaskDataTy &Data, const std::string implementsName);
 
   /// \brief Emit the target regions enclosed in \a GD function definition or
   /// the function itself in case it is a valid device function. Returns true if

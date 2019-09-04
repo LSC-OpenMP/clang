@@ -8465,6 +8465,7 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
   llvm::Triple TripleSmartnic("x86_64");
   llvm::Triple TripleHarp("x86_64");
   llvm::Triple TripleAwsF1("x86_64");
+  llvm::Triple TripleAlveo("x86_64");
 
   switch (Triple.getArch()) {
   default:
@@ -8838,6 +8839,9 @@ static TargetInfo *AllocateTarget(const llvm::Triple &Triple,
 
   case llvm::Triple::awsf1:
     return new X86_64TargetInfo(TripleAwsF1, Opts);
+
+  case llvm::Triple::alveo:
+    return new X86_64TargetInfo(TripleAlveo, Opts);
 
   case llvm::Triple::x86_64:
     if (Triple.isOSDarwin() || Triple.isOSBinFormatMachO())

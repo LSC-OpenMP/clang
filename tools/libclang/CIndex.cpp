@@ -2132,7 +2132,7 @@ void OMPClauseEnqueue::VisitOMPCollapseClause(const OMPCollapseClause *C) {
 
 void OMPClauseEnqueue::VisitOMPDefaultClause(const OMPDefaultClause *C) { }
 
-void OMPClauseEnqueue::VisitOMPModuleClause(const OMPModuleClause *C) { }
+void OMPClauseEnqueue::VisitOMPImplementsClause(const OMPImplementsClause *C) { }
 
 void OMPClauseEnqueue::VisitOMPUseClause(const OMPUseClause *C) { }
 

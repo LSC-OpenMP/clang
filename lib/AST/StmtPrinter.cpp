@@ -614,9 +614,9 @@ void OMPClausePrinter::VisitOMPIfClause(OMPIfClause *Node) {
   OS << ")";
 }
 
-void OMPClausePrinter::VisitOMPModuleClause(OMPModuleClause *Node) {
+void OMPClausePrinter::VisitOMPImplementsClause(OMPImplementsClause *Node) {
   OS << "module(";
-  OS << Node->getModuleNameInfo();
+  OS << Node->getImplementsNameInfo();
   OS << ")";
 }
 

@@ -1296,7 +1296,7 @@ OMPClause *Parser::ParseOpenMPClause(OpenMPDirectiveKind DKind,
   case OMPC_if:
     Clause = ParseOpenMPSingleExprWithArgClause(CKind);
     break;
-  case OMPC_module:
+  case OMPC_implements:
     if (!FirstClause) {
       Diag(Tok, diag::err_omp_more_one_clause)
           << getOpenMPDirectiveName(DKind) << getOpenMPClauseName(CKind) << 0;
@@ -2020,8 +2020,8 @@ OMPClause *Parser::ParseOpenMPVarListClause(OpenMPDirectiveKind DKind,
 
 /// \brief Parsing of OpenMP clauses with accelerator.
 ///
-///    module-clause:
-///      'module' '(' filename ')'
+///    implements-clause:
+///      'implements' '(' function ')'
 ///
 OMPClause *Parser::ParseOpenMPAccClause(OpenMPClauseKind Kind) {
   SourceLocation Loc = ConsumeToken();

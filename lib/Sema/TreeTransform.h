@@ -8384,7 +8384,7 @@ TreeTransform<Derived>::TransformOMPDefaultmapClause(OMPDefaultmapClause *C) {
 
 template <typename Derived>
 OMPClause *
-TreeTransform<Derived>::TransformOMPModuleClause(OMPModuleClause *C) {
+TreeTransform<Derived>::TransformOMPImplementsClause(OMPImplementsClause *C) {
   return C;
 }
 

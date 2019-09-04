@@ -2036,15 +2036,15 @@ public:
   }
 };
 
-/// \brief This represents clause 'module' in the '#pragma omp ...'
+/// \brief This represents clause 'implements' in the '#pragma omp ...'
 /// directives.
 ///
 /// \code
-/// #pragma omp parallel use(hrw) module(multr.v)
+/// #pragma omp target  implements(function)
 /// \endcode
-/// In this example directive '#pragma omp parallel' has clause 'module'
+/// In this example directive '#pragma omp target' has clause 'implements'
 ///
-class OMPModuleClause : public OMPClause {
+class OMPImplementsClause : public OMPClause {
   friend class OMPClauseReader;
 
   /// \brief Location of '('.
@@ -2054,43 +2054,44 @@ class OMPModuleClause : public OMPClause {
 
   /// \brief Set the location of '('.
   void setLParenLoc(SourceLocation Loc) { LParenLoc = Loc; }
-  /// \brief Set module StringRef.
-  void setModuleNameInfo(std::string S) { NameInfo = S; }
+  /// \brief Set implements StringRef.
+  void setImplementsNameInfo(std::string S) { NameInfo = S; }
 
 public:
-  /// \brief Build 'module' clause.
+  /// \brief Build 'implements' clause.
   ///
   /// \param StartLoc Starting location of the clause.
   /// \param LParenLoc Location of '('.
   /// \param EndLoc Ending location of the clause.
-  /// \param NameInfo Module custom operator.
+  /// \param NameInfo Implements custom operator.
   ///
-  OMPModuleClause(SourceLocation StartLoc, SourceLocation LParenLoc,
+  OMPImplementsClause(SourceLocation StartLoc, SourceLocation LParenLoc,
                   SourceLocation EndLoc, llvm::StringRef NameInfo)
-      : OMPClause(OMPC_module, StartLoc, EndLoc), LParenLoc(LParenLoc),
+      : OMPClause(OMPC_implements, StartLoc, EndLoc), LParenLoc(LParenLoc),
         NameInfo(NameInfo.str()) {}
 
   /// \brief Build an empty clause.
   ///
-  explicit OMPModuleClause()
-      : OMPClause(OMPC_module, SourceLocation(), SourceLocation()),
+  explicit OMPImplementsClause()
+      : OMPClause(OMPC_implements, SourceLocation(), SourceLocation()),
         NameInfo(nullptr) {}
 
   /// \brief Get name info of the clause.
-  std::string getModuleNameInfo() { return NameInfo; }
+  std::string getImplementsNameInfo() { return NameInfo; }
   /// \brief Get name info of the clause.
-  std::string getModuleNameInfo() const { return NameInfo; }
+  std::string getImplementsNameInfo() const { return NameInfo; }
   /// \brief Get location of '('.
   SourceLocation getLParenLoc() { return LParenLoc; }
 
   static bool classof(const OMPClause *T) {
-    return T->getClauseKind() == OMPC_module;
+    return T->getClauseKind() == OMPC_implements;
   }
 
   child_range children() {
     return child_range(child_iterator(), child_iterator());
   }
 };
+
 
 /// \brief This represents 'check' clause in the '#pragma omp ...' directive.
 ///

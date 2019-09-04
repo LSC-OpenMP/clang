@@ -1329,9 +1329,6 @@ static void emitCommonOMPParallelDirective(CodeGenFunction &CGF,
                                            OpenMPDirectiveKind InnermostKind,
                                            const RegionCodeGenTy &CodeGen,
                                            unsigned CaptureLevel = 1) {
-
-  CGF.CGM.getOpenMPRuntime().createFPGAInfo(S);
-
   CGF.CGM.getOpenMPRuntime().registerParallelContext(CGF, S);
   auto CS = cast<CapturedStmt>(S.getAssociatedStmt());
   auto OutlinedFn = CGF.CGM.getOpenMPRuntime().emitParallelOutlinedFunction(
@@ -4115,7 +4112,6 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_firstprivate:
   case OMPC_lastprivate:
   case OMPC_reduction:
-  case OMPC_module:
   case OMPC_safelen:
   case OMPC_simdlen:
   case OMPC_collapse:
@@ -4139,6 +4135,7 @@ static void EmitOMPAtomicExpr(CodeGenFunction &CGF, OpenMPClauseKind Kind,
   case OMPC_depend:
   case OMPC_mergeable:
   case OMPC_device:
+  case OMPC_implements:
   case OMPC_threads:
   case OMPC_simd:
   case OMPC_map:
@@ -4279,10 +4276,20 @@ static void emitCommonOMPTargetDirective(CodeGenFunction &CGF,
                                               /*IsSigned=*/false);
     return NumIterations;
   };
+
+  std::string implementsName;
+
+  const OMPImplementsClause *c_implements = S.getSingleClause<OMPImplementsClause>();
+
+  if (c_implements) {
+    implementsName = c_implements->getImplementsNameInfo();
+  }
+
   CGM.getOpenMPRuntime().emitTargetNumIterationsCall(CGF, S, Device,
                                                      SizeEmitter);
   CGM.getOpenMPRuntime().emitTargetCall(CGF, S, Fn, FnID, IfCond, Device,
-                                        CapturedVars, MapArrays, *Data);
+                                        CapturedVars, MapArrays, *Data,
+                                        implementsName);
 }
 
 void TargetCodegen(CodeGenFunction &CGF, PrePostActionTy &Action,

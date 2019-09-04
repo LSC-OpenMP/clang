@@ -8842,11 +8842,11 @@ public:
                                   SourceLocation StartLoc,
                                   SourceLocation LParenLoc,
                                   SourceLocation EndLoc);
-  /// \brief Called on well-formed 'module' clause.
-  OMPClause *ActOnOpenMPModuleClause(StringRef NameInfo,
-                                     SourceLocation StartLoc,
-                                     SourceLocation LParenLoc,
-                                     SourceLocation EndLoc);
+  /// \brief Called on well-formed 'implements' clause.
+  OMPClause *ActOnOpenMPImplementsClause(StringRef NameInfo,
+                                         SourceLocation StartLoc,
+                                         SourceLocation LParenLoc,
+                                         SourceLocation EndLoc);
   /// \brief Called on well-formed 'check' clause.
   OMPClause *ActOnOpenMPCheckClause(SourceLocation StartLoc,
                                     SourceLocation EndLoc);

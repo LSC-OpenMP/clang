@@ -130,7 +130,6 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   .Case(#Name, static_cast<unsigned>(OMPC_DEFAULTMAP_MODIFIER_##Name))
 #include "clang/Basic/OpenMPKinds.def"
         .Default(OMPC_DEFAULTMAP_unknown);
-  case OMPC_module:
   case OMPC_lastprivate:
     return llvm::StringSwitch<OpenMPLastprivateClauseKind>(Str)
 #define OPENMP_LASTPRIVATE_MODIFIER(Name) .Case(#Name, OMPC_LASTPRIVATE_##Name)
@@ -164,6 +163,7 @@ unsigned clang::getOpenMPSimpleClauseType(OpenMPClauseKind Kind,
   case OMPC_capture:
   case OMPC_seq_cst:
   case OMPC_device:
+  case OMPC_implements:
   case OMPC_threads:
   case OMPC_simd:
   case OMPC_num_teams:
@@ -288,7 +288,6 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
 #include "clang/Basic/OpenMPKinds.def"
     }
     llvm_unreachable("Invalid OpenMP 'schedule' clause type");
-  case OMPC_module:
   case OMPC_lastprivate:
     switch (Type) {
     case OMPC_LASTPRIVATE_unknown:
@@ -329,6 +328,7 @@ const char *clang::getOpenMPSimpleClauseTypeName(OpenMPClauseKind Kind,
   case OMPC_capture:
   case OMPC_seq_cst:
   case OMPC_device:
+  case OMPC_implements:
   case OMPC_threads:
   case OMPC_simd:
   case OMPC_num_teams:
